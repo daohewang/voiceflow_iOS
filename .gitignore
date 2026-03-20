@@ -1,0 +1,74 @@
+# ========================================
+# Swift / Xcode
+# ========================================
+
+# Build
+.build/
+build/
+DerivedData/
+*.build/
+
+# Package
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+!*.xcworkspace/xcshareddata/
+
+# Playground
+*.playground
+timeline.xctimeline
+
+# ========================================
+# macOS
+# ========================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Thumbnails
+*.Trashes
+
+# Files that might appear on external disk
+.Spotlight-V100
+.Trashes
+
+# ========================================
+# IDE / Editor
+# ========================================
+
+# VSCode
+.vscode/
+
+# JetBrains
+.idea/
+
+# ========================================
+# Project Specific
+# ========================================
+
+# OMC state files
+.omc/*
+
+# Claude Code memory
+.claude/
+
+# Secrets / API Keys (never commit)
+*.env
+*.pem
+*.p12
+credentials.json
+secrets.json
+
+# Logs
+*.log
+logs/
+
+echo/

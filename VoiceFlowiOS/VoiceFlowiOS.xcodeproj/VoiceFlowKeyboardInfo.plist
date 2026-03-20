@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 键盘扩展配置 -->
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<!-- 是否为主键盘 -->
+			<key>IsASCIICapable</key>
+			<false/>
+			
+			<!-- 键盘类型 -->
+			<key>PrefersRightToLeft</key>
+			<false/>
+			
+			<!-- 主要语言 -->
+			<key>PrimaryLanguage</key>
+			<string>zh-Hans</string>
+			
+			<!-- 请求完全访问权限（允许网络和麦克风访问）-->
+			<key>RequestsOpenAccess</key>
+			<true/>
+		</dict>
+		
+		<!-- 扩展点标识符 -->
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.ui-services</string>
+		
+		<!-- 主类 -->
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
+	</dict>
+</dict>
+</plist>

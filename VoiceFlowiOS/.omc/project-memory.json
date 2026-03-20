@@ -1,0 +1,122 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1773916422767,
+  "projectRoot": "/Users/swordsmanye/Downloads/1-Projects/AiMaker/ai-auto-run/NoTyping/VoiceFlowiOS",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "VoiceFlowKeyboard": {
+      "path": "VoiceFlowKeyboard",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1773916422754,
+      "keyFiles": [
+        "CLAUDE.md",
+        "Info.plist",
+        "KeyboardView.swift",
+        "KeyboardViewController.swift",
+        "KeyboardViewModel.swift"
+      ]
+    },
+    "VoiceFlowiOS": {
+      "path": "VoiceFlowiOS",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1773916422755,
+      "keyFiles": [
+        "CLAUDE.md",
+        "ContentView.swift",
+        "Info.plist",
+        "LaunchScreen.storyboard",
+        "VoiceFlowiOS.entitlements"
+      ]
+    },
+    "VoiceFlowiOS.xcodeproj": {
+      "path": "VoiceFlowiOS.xcodeproj",
+      "purpose": null,
+      "fileCount": 16,
+      "lastAccessed": 1773916422755,
+      "keyFiles": [
+        "AUDIO_TROUBLESHOOTING.md",
+        "KeyboardViewModel.swift",
+        "KeyboardViewModel_NEW.swift",
+        "SETUP_GUIDE.md",
+        "TROUBLESHOOTING.md"
+      ]
+    },
+    "VoiceFlowiOS/Components": {
+      "path": "VoiceFlowiOS/Components",
+      "purpose": "UI components",
+      "fileCount": 0,
+      "lastAccessed": 1773916422755,
+      "keyFiles": []
+    },
+    "VoiceFlowiOS/Models": {
+      "path": "VoiceFlowiOS/Models",
+      "purpose": "Data models",
+      "fileCount": 3,
+      "lastAccessed": 1773916422755,
+      "keyFiles": [
+        "AppState.swift",
+        "HistoryEntry.swift",
+        "StyleTemplate.swift"
+      ]
+    },
+    "VoiceFlowiOS/Views": {
+      "path": "VoiceFlowiOS/Views",
+      "purpose": "View templates",
+      "fileCount": 8,
+      "lastAccessed": 1773916422756,
+      "keyFiles": [
+        "AccountView.swift",
+        "BottomNavBar.swift",
+        "DictionaryView.swift"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "VoiceFlowiOS/VoiceFlowiOSApp.swift",
+      "accessCount": 4,
+      "lastAccessed": 1773916851998,
+      "type": "file"
+    },
+    {
+      "path": "VoiceFlowiOS/Views/HomeView.swift",
+      "accessCount": 4,
+      "lastAccessed": 1773916899838,
+      "type": "file"
+    },
+    {
+      "path": "VoiceFlowiOS/Models/AppState.swift",
+      "accessCount": 3,
+      "lastAccessed": 1773916832452,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
