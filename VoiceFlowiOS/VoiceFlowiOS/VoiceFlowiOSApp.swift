@@ -4,16 +4,17 @@
  * [POS]: VoiceFlowiOS 应用的根入口，管理 ContentView 生命周期 + URL Scheme 处理
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  *
- * 架构说明：
- *   1. 键盘 Extension 用 URL Scheme 唤醒主 App
- *   2. 主 App 在前台启动 AVAudioSession + 录音
- *   3. 录音启动后（无论成败）立即 suspend 返回后台
- *   4. 键盘通过 Darwin Notification 实时接收状态
- *   5. 录音完成后，结果写入 App Group，键盘读取并插入
+ * 架构说明（后台常驻模式）：
+ *   1. App 启动时预配置 AVAudioSession，进入后台时启动静音播放保活
+ *   2. 键盘优先通过 Darwin Notification (requestStart) 直接触发后台录音
+ *   3. 仅在主 App 未存活时，fallback 到 URL Scheme 唤醒
+ *   4. 录音完成后，结果写入 App Group，Darwin 通知键盘读取并插入
+ *   5. AVAudioSession 永不 deactivate，确保后台常驻能力
  */
 
 import SwiftUI
 import UIKit
+import AVFoundation
 
 // ========================================
 // MARK: - Darwin Notification Names
@@ -24,6 +25,8 @@ let kVoiceFlowRecordingStopped = CFNotificationName("com.swordsmanye.voiceflow.r
 let kVoiceFlowAudioLevel = CFNotificationName("com.swordsmanye.voiceflow.audioLevel" as CFString)
 let kVoiceFlowResultReady = CFNotificationName("com.swordsmanye.voiceflow.resultReady" as CFString)
 let kVoiceFlowStopRecording = CFNotificationName("com.swordsmanye.voiceflow.stopRecording" as CFString)
+let kVoiceFlowRequestStart = CFNotificationName("com.swordsmanye.voiceflow.requestStart" as CFString)
+let kVoiceFlowRequestAck   = CFNotificationName("com.swordsmanye.voiceflow.requestAck" as CFString)
 
 // ========================================
 // MARK: - VoiceFlow iOS App
@@ -33,15 +36,25 @@ let kVoiceFlowStopRecording = CFNotificationName("com.swordsmanye.voiceflow.stop
 struct VoiceFlowiOSApp: App {
 
     @State private var appState = AppState.shared
-    @State private var pendingRecordRequest = false
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Darwin 监听 + 音频会话必须在 App 启动时立即注册，
+    // 而非等到 ContentView.onAppear — 否则 URL Scheme 冷启动时
+    // listener 尚未就位，键盘发来的 stopRecording 等通知会丢失。
+    init() {
+        setupDarwinListeners()
+        configureAudioSessionOnce()
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(appState)
-                .onAppear { setupDarwinListeners() }
                 .onOpenURL { url in handleOpenURL(url) }
                 .preferredColorScheme(.light)
+                .onChange(of: scenePhase) { _, newPhase in
+                    handleScenePhase(newPhase)
+                }
                 .onChange(of: appState.recordingStatus) { _, newStatus in
                     handleRecordingStatusChange(newStatus)
                 }
@@ -52,7 +65,23 @@ struct VoiceFlowiOSApp: App {
     // MARK: - Darwin 监听（接收键盘 stopRecording 命令）
     // ----------------------------------------
 
+    private static var darwinListenersRegistered = false
+
     private func setupDarwinListeners() {
+        guard !Self.darwinListenersRegistered else { return }
+        Self.darwinListenersRegistered = true
+        
+        // 监听来自 AppIntent 的特权背景启动请求 (iOS 18)
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("VoiceFlowStartRecordingIntent"), object: nil, queue: .main) { _ in
+            Task { @MainActor in
+                print("[App] 🎤 Received VoiceFlowStartRecordingIntent from Intent")
+                let status = AppState.shared.recordingStatus
+                if status != .recording && status != .processing {
+                    await AppState.shared.startRecording()
+                }
+            }
+        }
+
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             nil,
@@ -69,8 +98,14 @@ struct VoiceFlowiOSApp: App {
 
                     await AppState.shared.stopRecording()
 
-                    // 停止录音完成后延迟结束后台任务，给 LLM 回调留时间
-                    try? await Task.sleep(nanoseconds: 40_000_000_000) // 40s 上限
+                    // 等待录音处理完成（轮询状态，最长 25s，避免超出 iOS 后台时限）
+                    for _ in 0..<25 {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        let status = AppState.shared.recordingStatus
+                        if case .done = status { break }
+                        if case .error = status { break }
+                        if case .idle = status { break }
+                    }
                     if bgTaskID != .invalid {
                         UIApplication.shared.endBackgroundTask(bgTaskID)
                         print("[App] Background task ended")
@@ -78,6 +113,36 @@ struct VoiceFlowiOSApp: App {
                 }
             },
             kVoiceFlowStopRecording.rawValue,
+            nil,
+            .deliverImmediately
+        )
+
+        // 键盘 Darwin 请求开始录音（后台直接响应，无需 URL Scheme 跳转）
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    // 去重：仅在非活动状态响应，防止 Darwin 重复投递
+                    let status = AppState.shared.recordingStatus
+                    guard status != .recording && status != .processing else {
+                        print("[App] Already recording/processing, ignoring duplicate requestStart")
+                        return
+                    }
+                    // 立即 ACK — 让键盘知道主 App 存活
+                    CFNotificationCenterPostNotification(
+                        CFNotificationCenterGetDarwinNotifyCenter(),
+                        kVoiceFlowRequestAck, nil, nil, true
+                    )
+                    // 不停止 KeepAlive — .mixWithOthers 让静音播放和录音共存
+                    // 避免 stop→start 硬件时序竞争（isBusy 561015905）
+                    AppState.shared.isKeyboardRecording = true
+                    print("[App] Darwin requestStart received — starting recording from background")
+                    await AppState.shared.startRecording()
+                    // 错误处理统一由 handleRecordingStatusChange 负责
+                }
+            },
+            kVoiceFlowRequestStart.rawValue,
             nil,
             .deliverImmediately
         )
@@ -93,31 +158,27 @@ struct VoiceFlowiOSApp: App {
 
         switch url.host {
         case "startRecording":
-            print("[App] ▶️ startRecording triggered from keyboard")
-            pendingRecordRequest = true
+            print("[App] ▶️ startRecording triggered from keyboard (URL Scheme)")
             appState.selectedTab = .home
             appState.isVoiceFlowEnabled = true
             appState.isKeyboardRecording = true
 
-            // 启动录音 → 无论成败都返回键盘
-            Task { @MainActor in
-                print("[App] Calling appState.startRecording()...")
-                await appState.startRecording()
-                print("[App] startRecording returned, status=\(appState.recordingStatus)")
+            // 仅在麦克风权限已授予时直接启动录音
+            // 未授权 → ContentView 会显示 PermissionOnboardingView，
+            // 授权完成后由 onComplete 回调自动启动录音
+            guard AVAudioSession.sharedInstance().recordPermission == .granted else {
+                print("[App] Mic permission not granted — showing onboarding")
+                return
+            }
 
-                // 录音失败 → 错误写入 App Group 通知键盘
+            Task { @MainActor in
+                await appState.startRecording()
+
                 if case .error(let msg) = appState.recordingStatus {
                     print("[App] ❌ Recording error: \(msg)")
                     saveErrorAndNotifyKeyboard(msg)
-                    pendingRecordRequest = false
                     appState.isKeyboardRecording = false
-                    return  // 不 suspend，留在前台让用户看到错误
                 }
-
-                // 等 500ms 让音频会话充分稳定，然后返回键盘
-                print("[App] Recording OK, waiting 500ms before suspend...")
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                suspendToBackground()
             }
 
         case "stopRecording":
@@ -141,47 +202,27 @@ struct VoiceFlowiOSApp: App {
             postDarwinNotification(kVoiceFlowRecordingStopped)
 
         case .done:
-            if pendingRecordRequest {
+            if appState.isKeyboardRecording {
                 let result = appState.llmText.isEmpty ? appState.asrText : appState.llmText
                 if !result.isEmpty { saveResultAndNotifyKeyboard(result) }
             }
             appState.isKeyboardRecording = false
+            // 无条件重启保活 — 防止前台→后台窗口期被 iOS suspend
+            BackgroundKeepAlive.shared.start()
 
         case .error(let msg):
-            if pendingRecordRequest {
+            if appState.isKeyboardRecording {
                 saveErrorAndNotifyKeyboard(msg)
-                pendingRecordRequest = false
             }
             appState.isKeyboardRecording = false
             postDarwinNotification(kVoiceFlowRecordingStopped)
+            BackgroundKeepAlive.shared.start()
 
         case .idle:
             break
         }
     }
 
-    // ----------------------------------------
-    // MARK: - 返回后台（suspend）
-    // ----------------------------------------
-
-    private func suspendToBackground() {
-        guard appState.isKeyboardRecording else {
-            print("[App] ⚠️ Not keyboard recording, skip suspend")
-            return
-        }
-        print("[App] Attempting suspend to return to keyboard...")
-
-        // 延迟到下一个 run loop 确保当前 UI 更新完成
-        DispatchQueue.main.async {
-            let sel = Selector(("suspend"))
-            guard UIApplication.shared.responds(to: sel) else {
-                print("[App] ❌ suspend selector not available")
-                return
-            }
-            UIApplication.shared.perform(sel)
-            print("[App] ✅ Suspended via perform")
-        }
-    }
 
     // ----------------------------------------
     // MARK: - 保存结果并通知键盘
@@ -194,7 +235,6 @@ struct VoiceFlowiOSApp: App {
         let readBack = SharedStore.read("pendingResult")
         print("[App] Keychain write verify: \(readBack != nil ? "✅ OK (\(readBack!.count) chars)" : "❌ FAILED")")
 
-        pendingRecordRequest = false
         postDarwinNotification(kVoiceFlowResultReady)
         print("[App] Posted resultReady notification")
     }
@@ -214,5 +254,55 @@ struct VoiceFlowiOSApp: App {
             CFNotificationCenterGetDarwinNotifyCenter(),
             name, nil, nil, true
         )
+    }
+
+    // ----------------------------------------
+    // MARK: - 音频会话预配置
+    // ----------------------------------------
+
+    /// 启动时预配置 AVAudioSession（.playAndRecord），
+    /// 为后台 keepalive 和 Darwin 直接触发录音打下基础。
+    /// 不会触发麦克风权限弹窗（只有实际录音时才请求）。
+    private static var audioSessionConfigured = false
+
+    private func configureAudioSessionOnce() {
+        guard !Self.audioSessionConfigured else { return }
+        Self.audioSessionConfigured = true
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+            )
+            try session.setActive(true)
+            print("[App] ✅ Audio session pre-configured")
+        } catch {
+            print("[App] ⚠️ Audio session pre-config failed: \(error)")
+        }
+    }
+
+    // ----------------------------------------
+    // MARK: - Scene Phase（后台保活管理）
+    // ----------------------------------------
+
+    /// App 进入后台 → 启动静音播放保活
+    /// App 回到前台 → 停止保活（节省资源）
+    private func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            BackgroundKeepAlive.shared.start()
+            print("[App] Entered background — keepalive started")
+        case .active:
+            // 如果键盘正在录音中（或者处于 AI 处理中），不要停止保活，否则会导致录音中断
+            if appState.recordingStatus == .idle {
+                BackgroundKeepAlive.shared.stop()
+                print("[App] Entered active — keepalive stopped")
+            } else {
+                print("[App] Entered active — keepalive maintained for ongoing recording")
+            }
+        default:
+            break
+        }
     }
 }

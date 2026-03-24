@@ -2,15 +2,16 @@
 Swift 6 + SwiftUI + @Observable + AVFoundation + URLSession WebSocket
 
 <directory>
-Core/ - 业务核心层 (8文件 + Providers子目录)
-  AudioEngine.swift       - iOS AVAudioSession 音频采集，16kHz PCM 输出
-  ASRClient.swift         - ElevenLabs WebSocket 实时转录
-  LLMClient.swift         - LLM 中枢，调用提供商润色文本
+Core/ - 业务核心层 (9文件 + Providers子目录)
+  AudioEngine.swift          - iOS AVAudioSession 音频采集，16kHz PCM 输出（session 永不 deactivate）
+  BackgroundKeepAlive.swift  - 静音播放保活器，维持后台 UIBackgroundModes:audio；每 5s 写心跳时间戳到 SharedStore
+  ASRClient.swift            - ElevenLabs WebSocket 实时转录
+  LLMClient.swift            - LLM 中枢，调用提供商润色文本
   RecordingCoordinator.swift - 录音→转录→润色→UIPasteboard 完整数据流
-  KeychainManager.swift   - UserDefaults API Key 存储
-  UsageStats.swift        - 录音时长/字数/节省时间统计
-  PermissionManager.swift - iOS AVAudioSession 麦克风权限
-  Logger.swift            - 调试日志写入 Documents/Logs/
+  KeychainManager.swift      - UserDefaults API Key 存储
+  UsageStats.swift           - 录音时长/字数/节省时间统计
+  PermissionManager.swift    - iOS AVAudioSession 麦克风权限
+  Logger.swift               - 调试日志写入 Documents/Logs/
 
   Providers/ - 提供商协议与工厂
     LLMProvider.swift     - LLMProvider 协议 + LLMProviderType 枚举
@@ -45,7 +46,12 @@ VoiceFlowiOSApp.swift - @main 入口，注入 AppState.shared
 </config>
 
 ## 架构决策
+- 后台常驻：BackgroundKeepAlive 静音播放 + AVAudioSession 永不 deactivate；心跳每 5s 写 SharedStore 供键盘判活
+- 录音触发：Darwin requestStart 优先（无需跳转），URL Scheme 兜底
+- ACK 握手：主 App 收到 requestStart 后立即发送 Darwin requestAck，确认自身存活
 - iOS 文本注入：UIPasteboard.general.string（无 macOS 辅助功能依赖）
 - 状态管理：AppState.RecordingStatus 枚举状态机（idle/recording/processing/done/error）
-- 音频：AVAudioSession .record + .measurement，支持蓝牙麦克风
+- 音频：AVAudioSession .playAndRecord + 蓝牙支持，session 全局预配置
 - 无第三方依赖，纯系统框架
+
+[PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

@@ -159,7 +159,22 @@ private struct ResultCard: View {
                 Text(statusLabel)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color(hex: "#64748b"))
-                Spacer()
+                // 强制重置按钮（仅在非空闲时显示，用于故障恢复）
+                if appState.recordingStatus != .idle {
+                    Button {
+                        appState.forceReset()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("重置")
+                        }
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 8)
+                }
+
                 // 复制按钮（有最终结果时显示）
                 if !appState.llmText.isEmpty || (!appState.asrText.isEmpty && appState.llmText.isEmpty) {
                     Button {

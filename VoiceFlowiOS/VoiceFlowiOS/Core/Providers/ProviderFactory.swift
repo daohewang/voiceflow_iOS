@@ -16,11 +16,10 @@ struct ProviderFactory {
 
     static func createLLMProvider(type: LLMProviderType) -> LLMProvider {
         switch type {
-        case .openRouter: return OpenRouterProvider()
-        case .deepSeek:   return DeepSeekProvider()
-        case .miniMax:    return OpenRouterProvider() // Fallback
-        case .zhiPu:      return OpenRouterProvider() // Fallback
-        case .kimi:       return OpenRouterProvider() // Fallback
+        case .openRouter, .miniMax, .zhiPu, .kimi:
+            return OpenRouterProvider()
+        case .deepSeek:
+            return DeepSeekProvider()
         }
     }
 }

@@ -27,7 +27,8 @@ final class RecordingCoordinator {
     // MARK: - Components
     // ----------------------------------------
 
-    private var audioEngine: AudioEngine?
+    /// 复用的音频引擎（整个 App 生命周期内不销毁）
+    private let audioEngine = AudioEngine()
 
     // ----------------------------------------
     // MARK: - State
@@ -49,6 +50,26 @@ final class RecordingCoordinator {
 
     init(appState: AppState) {
         self.appState = appState
+        setupAudioCallbacks()
+    }
+
+    /// 设置音频引擎回调（只需一次）
+    private func setupAudioCallbacks() {
+        // 音频数据 → 本地缓存（不走网络，后台安全）
+        audioEngine.onAudioData = { [weak self] data in
+            Task { @MainActor [weak self] in
+                self?.audioDataBuffer.append(data)
+            }
+        }
+
+        // 音量回调 → 驱动 UI 波形 + 共享给键盘
+        audioEngine.onAudioLevel = { [weak self] level in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.appState.audioLevel = level
+                self.shareAudioLevelThrottled(level)
+            }
+        }
     }
 
     // ----------------------------------------
@@ -70,7 +91,7 @@ final class RecordingCoordinator {
             let granted = await permManager.requestMicrophone()
             guard granted else {
                 print("[RC] ❌ Mic permission denied")
-                appState.recordingStatus = .error("请在系统设置中开启麦克风权限")
+                appState.updateRecordingStatus(.error("请在系统设置中开启麦克风权限"))
                 return
             }
         }
@@ -78,7 +99,7 @@ final class RecordingCoordinator {
         // 验证 ElevenLabs API Key
         guard let _ = getAPIKey(.elevenLabs) else {
             print("[RC] ❌ No ElevenLabs API Key!")
-            appState.recordingStatus = .error("请先在设置中配置 ElevenLabs API Key")
+            appState.updateRecordingStatus(.error("请先在设置中配置 ElevenLabs API Key"))
             return
         }
         print("[RC] ElevenLabs key found")
@@ -90,41 +111,26 @@ final class RecordingCoordinator {
         recordingStartTime = Date()
         appState.asrText = ""
         appState.llmText = ""
-        appState.recordingStatus = .recording
+        appState.updateRecordingStatus(.recording)
         SharedStore.write("recordingState", "recording")
 
         print("[RC] Starting recording session: \(sessionId)")
 
-        // 创建音频引擎
-        let engine = AudioEngine()
-        self.audioEngine = engine
-
-        // 音频数据 → 本地缓存（不走网络，后台安全）
-        engine.onAudioData = { [weak self] data in
-            Task { @MainActor [weak self] in
-                self?.audioDataBuffer.append(data)
-            }
-        }
-
-        // 音量回调 → 驱动 UI 波形 + 共享给键盘
-        engine.onAudioLevel = { [weak self] level in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.appState.audioLevel = level
-                self.shareAudioLevelThrottled(level)
-            }
-        }
-
-        // 启动音频引擎
+        // 启动音频引擎（复用实例，无需每次创建）
         do {
-            try engine.startRecording()
+            try audioEngine.startRecording()
             print("[RC] ✅ AudioEngine started")
-        } catch {
-            print("[RC] ❌ AudioEngine failed: \(error)")
-            appState.recordingStatus = .error("录音启动失败: \(error.localizedDescription)")
+        } catch AudioError.engineStartFailed, AudioError.audioSessionFailed {
+            // iOS blocked microphone activation from the background!
+            print("[RC] ⚠️ App is in background and iOS blocked Mic (engineStartFailed). Instructing keyboard to jump.")
+            appState.updateRecordingStatus(.error("NEEDS_JUMP"))
             isRecording = false
             SharedStore.write("recordingState", "idle")
-            cleanup()
+        } catch {
+            print("[RC] ❌ AudioEngine failed: \(error)")
+            appState.updateRecordingStatus(.error("录音启动失败: \(error.localizedDescription)"))
+            isRecording = false
+            SharedStore.write("recordingState", "idle")
         }
     }
 
@@ -143,32 +149,34 @@ final class RecordingCoordinator {
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
         recordingStartTime = nil
 
-        // 停止音频采集
-        audioEngine?.stopRecording()
+        // 停止音频采集（引擎保留供下次复用）
+        audioEngine.stopRecording()
         isRecording = false
-        appState.recordingStatus = .processing
+        appState.updateRecordingStatus(.processing)
         SharedStore.write("recordingState", "processing")
-        print("[RC] Audio stopped, buffered \(audioDataBuffer.count) chunks")
+        print("[RC] 🛑 stopRecording() - starting processing chain")
 
         // 合并 PCM 数据
         let pcmData = audioDataBuffer.reduce(Data()) { $0 + $1 }
+        let chunkCount = audioDataBuffer.count
         audioDataBuffer = []
-        cleanup()
 
         guard !pcmData.isEmpty else {
-            print("[RC] ❌ No audio data captured")
-            appState.recordingStatus = .idle
+            print("[RC] ❌ No audio data captured (0 chunks)")
+            appState.updateRecordingStatus(.idle)
             SharedStore.write("recordingState", "idle")
             return
         }
 
-        print("[RC] PCM data: \(pcmData.count) bytes (\(String(format: "%.1f", Double(pcmData.count) / 32000))s)")
+        print("[RC] Captured \(chunkCount) chunks, total \(pcmData.count) bytes (~\(String(format: "%.1f", Double(pcmData.count) / 32000))s)")
+        appState.updateLiveActivityStatus("正在转录...")
 
         // ElevenLabs REST API 转录
         guard let apiKey = getAPIKey(.elevenLabs) else {
             print("[RC] ❌ ElevenLabs key lost")
-            appState.recordingStatus = .error("ElevenLabs API Key 丢失")
+            appState.updateRecordingStatus(.error("ElevenLabs API Key 丢失"))
             SharedStore.write("recordingState", "idle")
+            appState.updateLiveActivityStatus("错误: Key 丢失")
             return
         }
 
@@ -179,17 +187,19 @@ final class RecordingCoordinator {
         do {
             asrText = try await transcribeAudio(wavData, apiKey: apiKey)
             print("[RC] ✅ ASR result: '\(asrText.prefix(80))'")
+            appState.updateLiveActivityStatus("正在润色...")
         } catch {
             print("[RC] ❌ ASR failed: \(error.localizedDescription)")
-            appState.recordingStatus = .error("语音识别失败: \(error.localizedDescription)")
+            appState.updateRecordingStatus(.error("语音识别失败: \(error.localizedDescription)"))
             SharedStore.write("recordingState", "idle")
+            appState.updateLiveActivityStatus("失败: 语音识别")
             return
         }
 
         let finalText = asrText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !finalText.isEmpty else {
             print("[RC] No text recognized")
-            appState.recordingStatus = .idle
+            appState.updateRecordingStatus(.idle)
             SharedStore.write("recordingState", "idle")
             return
         }
@@ -242,29 +252,29 @@ final class RecordingCoordinator {
 
         llmClient.polishText(finalText, style: styleId, apiKey: llmApiKey, providerType: llmProviderType)
 
-        // 35 秒超时保护
+        // 全局超时保护 (转录 + 润色)，防止卡死在 processing 状态
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s 总时长
             guard let self, self.currentSessionId == sessionId else { return }
             if case .processing = self.appState.recordingStatus {
-                print("[RC] ⚠️ LLM timeout, using raw text")
-                llmClient.cancel()
-                self.injectText(finalText, asrText: finalText, sessionId: sessionId, durationSeconds: durationSecs)
+                print("[RC] ⚠️ Total processing timeout (ASR/LLM), forcing idle")
+                self.appState.updateRecordingStatus(.error("任务处理超时，请重试"))
+                SharedStore.write("recordingState", "idle")
+                self.appState.updateLiveActivityStatus("处理超时")
             }
         }
     }
 
     /// 取消录音
     func cancelRecording() {
-        audioEngine?.stopRecording()
+        audioEngine.stopRecording()
         LLMClient.shared.cancel()
         isRecording = false
         audioDataBuffer = []
-        appState.recordingStatus = .idle
+        appState.updateRecordingStatus(.idle)
         appState.asrText = ""
         appState.llmText = ""
         SharedStore.write("recordingState", "idle")
-        cleanup()
     }
 
     // ----------------------------------------
@@ -378,20 +388,19 @@ final class RecordingCoordinator {
         UsageStats.shared.recordSession(durationSeconds: max(1, durationSeconds), characterCount: text.count)
         appState.addHistoryEntry(asrText: asrText, finalText: text, durationSeconds: durationSeconds)
 
-        appState.recordingStatus = .done
+        appState.updateRecordingStatus(.done)
         appState.llmText = text
         appState.clipboardCopied = true
+        appState.updateLiveActivityStatus("词句已润色")
         SharedStore.write("recordingState", "done")
 
         // 3 秒后回到 idle
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard let self, self.currentSessionId == sessionId else { return }
-            self.appState.recordingStatus = .idle
+            self.appState.updateRecordingStatus(.idle)
             self.appState.clipboardCopied = false
         }
-
-        cleanup()
     }
 
     // ----------------------------------------
@@ -416,10 +425,6 @@ final class RecordingCoordinator {
             CFNotificationName("com.swordsmanye.voiceflow.audioLevel" as CFString),
             nil, nil, true
         )
-    }
-
-    private func cleanup() {
-        audioEngine = nil
     }
 }
 

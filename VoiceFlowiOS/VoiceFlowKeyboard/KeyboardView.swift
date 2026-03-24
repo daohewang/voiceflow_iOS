@@ -50,7 +50,11 @@ struct KeyboardView: View {
                 }
 
                 // 录音按钮
-                RecordButton(state: viewModel.recordState, audioLevel: viewModel.audioLevel, onTap: viewModel.toggleRecording)
+                RecordButton(
+                    state: viewModel.recordState,
+                    audioLevel: viewModel.audioLevel,
+                    onTap: viewModel.toggleRecording
+                )
 
                 // 状态提示
                 Text(statusLabel)
@@ -225,52 +229,60 @@ private struct RecordButton: View {
     let onTap: () -> Void
 
     var body: some View {
+        // 统一走 Darwin + URL Scheme 路径（已验证可靠）
+        // AudioRecordingIntent 在 Extension 进程内执行时 NotificationCenter
+        // 无法跨进程到达主 App，暂不启用
         Button(action: onTap) {
-            ZStack {
-                // 录音中：音量驱动的波纹环
-                if state == .recording {
-                    Circle()
-                        .fill(Color.red.opacity(0.06))
-                        .frame(width: 100, height: 100)
-                        .scaleEffect(1.0 + CGFloat(audioLevel) * 0.4)
-                        .animation(.easeOut(duration: 0.15), value: audioLevel)
-
-                    Circle()
-                        .fill(Color.red.opacity(0.12))
-                        .frame(width: 80, height: 80)
-                        .scaleEffect(1.0 + CGFloat(audioLevel) * 0.6)
-                        .animation(.easeOut(duration: 0.12), value: audioLevel)
-                }
-
-                Circle()
-                    .fill(bgColor)
-                    .frame(width: 60, height: 60)
-                    .shadow(color: bgColor.opacity(0.35), radius: 12, x: 0, y: 6)
-
-                switch state {
-                case .idle:
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.white)
-                case .recording:
-                    // 麦克风 → 波纹图标，随音量跳动
-                    Image(systemName: "waveform")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(.white)
-                        .scaleEffect(1.0 + CGFloat(audioLevel) * 0.3)
-                        .animation(.easeOut(duration: 0.1), value: audioLevel)
-                case .processing:
-                    ProgressView().tint(.white)
-                case .waitingMainApp:
-                    Image(systemName: "arrow.up.forward.app.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.white)
-                }
-            }
+            buttonContent
         }
         .buttonStyle(.plain)
         .disabled(state == .processing)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: state)
+    }
+    
+    @ViewBuilder
+    private var buttonContent: some View {
+        ZStack {
+            // 录音中：音量驱动的波纹环
+            if state == .recording {
+                Circle()
+                    .fill(Color.red.opacity(0.06))
+                    .frame(width: 100, height: 100)
+                    .scaleEffect(1.0 + CGFloat(audioLevel) * 0.4)
+                    .animation(.easeOut(duration: 0.15), value: audioLevel)
+
+                Circle()
+                    .fill(Color.red.opacity(0.12))
+                    .frame(width: 80, height: 80)
+                    .scaleEffect(1.0 + CGFloat(audioLevel) * 0.6)
+                    .animation(.easeOut(duration: 0.12), value: audioLevel)
+            }
+
+            Circle()
+                .fill(bgColor)
+                .frame(width: 60, height: 60)
+                .shadow(color: bgColor.opacity(0.35), radius: 12, x: 0, y: 6)
+
+            switch state {
+            case .idle:
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.white)
+            case .recording:
+                // 麦克风 → 波纹图标，随音量跳动
+                Image(systemName: "waveform")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.white)
+                    .scaleEffect(1.0 + CGFloat(audioLevel) * 0.3)
+                    .animation(.easeOut(duration: 0.1), value: audioLevel)
+            case .processing:
+                ProgressView().tint(.white)
+            case .waitingMainApp:
+                Image(systemName: "arrow.up.forward.app.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.white)
+            }
+        }
     }
 
     private var bgColor: Color {

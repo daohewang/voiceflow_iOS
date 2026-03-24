@@ -22,9 +22,19 @@ struct ContentView: View {
             Color(hex: "#fcfcfc").ignoresSafeArea()
 
             if permissionsReady {
-                MainAppView()
+                if appState.isKeyboardRecording {
+                    ReturnGuideView()
+                } else {
+                    MainAppView()
+                }
             } else {
-                PermissionOnboardingView { permissionsReady = true }
+                PermissionOnboardingView {
+                    permissionsReady = true
+                    // 键盘唤起后授权完成 → 自动启动录音
+                    if appState.isKeyboardRecording {
+                        Task { await appState.startRecording() }
+                    }
+                }
             }
         }
         .onAppear {
@@ -34,8 +44,11 @@ struct ContentView: View {
             }
         }
         .onChange(of: appState.isKeyboardRecording) { _, isRecording in
-            // 键盘 URL Scheme 唤起 → 跳过引导，直接进入主界面
-            if isRecording { permissionsReady = true }
+            // 键盘唤起时，仅在权限已授予情况下跳过引导
+            // 未授权 → 保持 PermissionOnboardingView 显示，引导用户授权
+            if isRecording && AVAudioSession.sharedInstance().recordPermission == .granted {
+                permissionsReady = true
+            }
         }
     }
 }
@@ -191,6 +204,38 @@ private struct PermissionRow: View {
             RoundedRectangle(cornerRadius: 12).fill(.white)
                 .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
         )
+    }
+}
+
+// ========================================
+// MARK: - Return Guide View
+// ========================================
+
+private struct ReturnGuideView: View {
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            
+            // 引导箭头，指向左上角
+            Image(systemName: "arrow.up.left")
+                .font(.system(size: 64, weight: .bold))
+                .foregroundStyle(.blue)
+                .padding(.bottom, 20)
+            
+            Text("录音已在后台开启")
+                .font(.system(size: 24, weight: .bold))
+            
+            Text("请点击屏幕左上角的返回按钮\n回到聊天输入界面")
+                .font(.system(size: 16))
+                .foregroundStyle(Color(hex: "#71717a"))
+                .multilineTextAlignment(.center)
+                .lineSpacing(6)
+            
+            Spacer()
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(hex: "#fcfcfc"))
     }
 }
 

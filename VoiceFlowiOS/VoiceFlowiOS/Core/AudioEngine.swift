@@ -3,6 +3,12 @@
  * [OUTPUT]: 对外提供 AudioEngine 类，音频采集 + 格式转换 + 音量级别回调
  * [POS]: VoiceFlowiOS/Core 的音频层，被 RecordingCoordinator 消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ *
+ * 架构说明：
+ *   AVAudioEngine 实例在整个 App 生命周期内复用，避免每次录音创建/销毁
+ *   导致的音频硬件冲突（OSStatus 560557684）。
+ *   stopRecording 只移除 tap 和停止引擎，不销毁实例。
+ *   startRecording 调用 reset() 后重新 install tap 和 start。
  */
 
 import Foundation
@@ -12,7 +18,7 @@ import Foundation
 // MARK: - Audio Engine (iOS)
 // ========================================
 
-/// iOS 音频采集引擎
+/// iOS 音频采集引擎（复用模式）
 /// 职责：AVAudioSession 配置 → 麦克风采集 → 格式转换 → PCM 数据回调
 /// 输入：系统默认采样率
 /// 输出：16kHz / 16-bit / Mono PCM，每 100ms 回调一次
@@ -35,7 +41,8 @@ final class AudioEngine: @unchecked Sendable {
     // MARK: - Properties
     // ----------------------------------------
 
-    private var engine: AVAudioEngine?
+    /// AVAudioEngine 实例（优先复用，启动失败时自愈重建）
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
 
     var onAudioData: ((Data) -> Void)?
@@ -68,35 +75,64 @@ final class AudioEngine: @unchecked Sendable {
     func startRecording() throws {
         guard !isRecording else { return }
 
-        // iOS 必须配置 AVAudioSession
-        let audioSession = AVAudioSession.sharedInstance()
+        // 如果引擎还在运行，说明是连续录音模式（避免 2003329396 后台启动报错）
+        if engine.isRunning {
+            print("[AudioEngine] Engine is already running (continuous mode). Resuming logical capture.")
+            self.isRecording = true
+            return
+        }
         
+        // 仅在引擎彻底停止时才重新初始化
+        engine = AVAudioEngine()
+
+        // AVAudioSession category 已在 VoiceFlowiOSApp.init() 中预配置，
+        // 此处不再重复 setCategory — 避免与 KeepAlive 冲突导致 '!int' (560557684)。
+        // 但必须调用 setActive(true) — iOS 后台可能挂起 session，
+        // 不重新激活则 engine.start() 会报 'what' (2003329396)。
         do {
-            // 先停用旧的 session（如果有）
-            try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-            
-            // 配置音频会话
-            try audioSession.setCategory(
-                .playAndRecord,  // 改为 playAndRecord 以支持更多场景
-                mode: .default,   // 使用默认模式而非 measurement
-                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
-            )
-            
-            // 激活音频会话
-            try audioSession.setActive(true, options: [])
-            
-            print("[AudioEngine] AVAudioSession configured successfully")
+            try AVAudioSession.sharedInstance().setActive(true, options: [])
+            print("[AudioEngine] AVAudioSession re-activated")
         } catch {
-            print("[AudioEngine] AVAudioSession error: \(error)")
-            throw AudioError.audioSessionFailed(error)
+            print("[AudioEngine] AVAudioSession re-activate failed: \(error)")
+            // Do not throw immediately, allow fallback rebuilding.
         }
 
-        let engine = AVAudioEngine()
+        bufferLock.lock()
+        accumulatedBuffer.removeAll()
+        bufferLock.unlock()
+
+        // 尝试配置并启动引擎
+        do {
+            try configureAndStartEngine()
+        } catch {
+            print("[AudioEngine] First start failed (\(error)), waiting 100ms and recreating engine...")
+            // Fallback: asynchronous 100ms cool-down buffer if hardware is stuck
+            Thread.sleep(forTimeInterval: 0.1)
+            engine = AVAudioEngine()
+            try configureAndStartEngine()
+        }
+
+        self.isRecording = true
+    }
+
+    // ----------------------------------------
+    // MARK: - Engine Setup (可重试)
+    // ----------------------------------------
+
+    /// 重置引擎 → 获取硬件格式 → 安装 tap → 启动
+    private func configureAndStartEngine() throws {
+        engine.reset()
+
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
         let targetFormat = Self.targetFormat
-        
-        print("[AudioEngine] Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
+
+        print("[AudioEngine] Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch")
+
+        guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+            print("[AudioEngine] ❌ Invalid input format: \(inputFormat)")
+            throw AudioError.invalidFormat
+        }
 
         guard let newConverter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             print("[AudioEngine] Failed to create audio converter")
@@ -104,6 +140,7 @@ final class AudioEngine: @unchecked Sendable {
         }
         newConverter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
         newConverter.sampleRateConverterQuality = AVAudioQuality.medium.rawValue
+        self.converter = newConverter
 
         inputNode.installTap(
             onBus: 0,
@@ -111,6 +148,8 @@ final class AudioEngine: @unchecked Sendable {
             format: inputFormat
         ) { [weak self] buffer, _ in
             guard let self, let converter = self.converter else { return }
+            // MUTE LOGIC: If we are not logically recording, we just drop the buffer to keep the hardware alive!
+            guard self.isRecording else { return }
             self.processBuffer(buffer, converter: converter)
         }
 
@@ -123,28 +162,21 @@ final class AudioEngine: @unchecked Sendable {
             throw AudioError.engineStartFailed
         }
 
-        self.engine = engine
-        self.converter = newConverter
-        self.isRecording = true
-
-        print("[AudioEngine] Recording started - Input: \(inputFormat.sampleRate)Hz → 16kHz/16bit/mono")
+        print("[AudioEngine] Recording started - \(inputFormat.sampleRate)Hz → 16kHz/16bit/mono")
     }
 
     func stopRecording() {
-        guard isRecording, let engine = engine else { return }
+        guard isRecording else { return }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-
-        // 释放 AVAudioSession
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-
-        self.engine = nil
-        self.converter = nil
+        // DO NOT stop the engine or remove the tap!
+        // We must keep the hardware actively running 24/7 to maintain background mic privileges 
+        // given by iOS when the app was previously in the foreground!
+        // We only mute it logically.
+        
         self.isRecording = false
 
         flushBuffer()
-        print("[AudioEngine] Recording stopped")
+        print("[AudioEngine] Recording logically stopped (engine hardware KEPT RUNNING to retain privileges)")
     }
 
     // ----------------------------------------

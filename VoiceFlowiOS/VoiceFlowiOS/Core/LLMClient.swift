@@ -23,6 +23,9 @@ final class LLMClient {
 
     private(set) var isStreaming: Bool = false
 
+    /// 当前润色任务（用于真正取消网络请求）
+    private var currentTask: Task<Void, Never>?
+
     // ----------------------------------------
     // MARK: - Callbacks
     // ----------------------------------------
@@ -64,13 +67,15 @@ final class LLMClient {
         let provider = ProviderFactory.createLLMProvider(type: providerType)
         print("[LLM] Sending request to \(providerType.displayName), text='\(text.prefix(50))...'")
 
-        Task { @MainActor [weak self] in
+        currentTask = Task { @MainActor [weak self] in
             do {
                 let result = try await provider.polishText(text, systemPrompt: systemPrompt, apiKey: apiKey)
+                guard !Task.isCancelled else { return }
                 print("[LLM] ✅ Got result: '\(result.prefix(80))...'")
                 self?.onComplete?(result)
                 self?.isStreaming = false
             } catch {
+                guard !Task.isCancelled else { return }
                 print("[LLM] ❌ Error: \(error.localizedDescription)")
                 self?.onError?(error)
                 self?.isStreaming = false
@@ -78,9 +83,12 @@ final class LLMClient {
         }
     }
 
-    /// 取消当前请求
+    /// 取消当前请求（真正终止飞行中的网络任务）
     func cancel() {
+        currentTask?.cancel()
+        currentTask = nil
         isStreaming = false
+        print("[LLM] 🛑 Stream cancelled")
     }
 
     // ----------------------------------------

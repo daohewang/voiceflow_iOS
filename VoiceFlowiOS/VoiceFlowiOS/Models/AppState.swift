@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import ActivityKit
 import SwiftUI
 
 // ========================================
@@ -14,6 +15,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppState {
+    
+    // 实时活动引用
+    private var liveActivity: Activity<VoiceFlowActivityAttributes>? = nil
 
     // ----------------------------------------
     // MARK: - Singleton
@@ -141,15 +145,142 @@ final class AppState {
     // ----------------------------------------
 
     func startRecording() async {
+        startLiveActivity()
         await coordinator?.startRecording()
     }
 
     func stopRecording() async {
         await coordinator?.stopRecording()
+        stopLiveActivity()
     }
 
     func cancelRecording() {
         coordinator?.cancelRecording()
+        stopLiveActivity()
+    }
+
+    /// 强制重置状态（用于卡死时的手动救援）
+    func forceReset() {
+        print("[AppState] ⚠️ Force Reset triggered")
+        coordinator?.cancelRecording()
+        stopLiveActivity()
+        recordingStatus = .idle
+        asrText = ""
+        llmText = ""
+        SharedStore.write("recordingState", "idle")
+    }
+
+    // ----------------------------------------
+    // MARK: - 录音状态变更 + Darwin IPC
+    // ----------------------------------------
+
+    /// 更新录音状态并触发 Darwin 通知 + 键盘 IPC。
+    /// 关键设计：不依赖 SwiftUI onChange — 后台不渲染时 onChange 不触发，
+    /// 导致键盘永远收不到 recordingStarted/resultReady 等通知。
+    func updateRecordingStatus(_ status: RecordingStatus) {
+        recordingStatus = status
+        onRecordingStatusChanged(status)
+    }
+
+    private func onRecordingStatusChanged(_ status: RecordingStatus) {
+        switch status {
+        case .recording:
+            postDarwin(kVoiceFlowRecordingStarted)
+
+        case .processing:
+            postDarwin(kVoiceFlowRecordingStopped)
+            // CRITICAL FIX: The app audioEngine is stopped during processing.
+            // If the app is in the background, iOS will suspend it immediately because 
+            // the audio session is no longer active. We MUST start KeepAlive to retain the audio bus!
+            BackgroundKeepAlive.shared.start()
+
+        case .done:
+            if isKeyboardRecording {
+                let result = llmText.isEmpty ? asrText : llmText
+                if !result.isEmpty {
+                    SharedStore.write("pendingResult", result)
+                    SharedStore.write("recordingState", "done")
+                    let readBack = SharedStore.read("pendingResult")
+                    print("[AppState] Result write verify: \(readBack != nil ? "OK (\(readBack!.count) chars)" : "FAILED")")
+                    postDarwin(kVoiceFlowResultReady)
+                    print("[AppState] Posted resultReady")
+                }
+            }
+            isKeyboardRecording = false
+            BackgroundKeepAlive.shared.start()
+
+        case .error(let msg):
+            if isKeyboardRecording {
+                SharedStore.write("pendingResult", "ERROR:\(msg)")
+                SharedStore.write("recordingState", "idle")
+                postDarwin(kVoiceFlowResultReady)
+            }
+            isKeyboardRecording = false
+            postDarwin(kVoiceFlowRecordingStopped)
+            BackgroundKeepAlive.shared.start()
+
+        case .idle:
+            break
+        }
+    }
+
+    private func postDarwin(_ name: CFNotificationName) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            name, nil, nil, true
+        )
+    }
+
+    // ----------------------------------------
+    // MARK: - Live Activity
+    // ----------------------------------------
+
+    func updateLiveActivityStatus(_ status: String) {
+        // 先捕获引用，避免 Task 执行时 liveActivity 已被置 nil
+        guard let activity = liveActivity else { return }
+        Task {
+            let updatedState = VoiceFlowActivityAttributes.ContentState(status: status, startTime: Date())
+            await activity.update(ActivityContent(state: updatedState, staleDate: nil))
+            print("[AppState] 🔄 Live Activity updated: \(status)")
+        }
+    }
+
+    private func startLiveActivity() {
+        guard liveActivity == nil else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("[AppState] Live Activities are disabled by user or system.")
+            return
+        }
+
+        let attributes = VoiceFlowActivityAttributes(sessionName: "Recording Session")
+        let initialContentState = VoiceFlowActivityAttributes.ContentState(status: "正在录音...", startTime: Date())
+
+        do {
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: .init(state: initialContentState, staleDate: nil),
+                pushType: nil
+            )
+            self.liveActivity = activity
+            SharedStore.write("liveActivityActive", "true")
+            SharedStore.write("hasStartedLiveActivityBefore", "true")
+            print("[AppState] ✅ Live Activity started: \(activity.id)")
+        } catch {
+            print("[AppState] ❌ Failed to start Live Activity: \(error)")
+        }
+    }
+
+    private func stopLiveActivity() {
+        guard let activity = liveActivity else { return }
+        // 同步置 nil — 防止 startLiveActivity 在 Task 完成前误判为无活动
+        self.liveActivity = nil
+        SharedStore.write("liveActivityActive", "false")
+
+        Task {
+            let finalState = VoiceFlowActivityAttributes.ContentState(status: "录制结束", startTime: Date())
+            await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
+            print("[AppState] 🛑 Live Activity stopped")
+        }
     }
 
     // ----------------------------------------
