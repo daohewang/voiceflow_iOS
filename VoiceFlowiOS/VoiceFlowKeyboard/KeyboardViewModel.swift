@@ -257,6 +257,8 @@ final class KeyboardViewModel {
             if errMsg == "NEEDS_JUMP" {
                 print("[KeyboardVM] Main app requested URL Scheme jump due to background mic block.")
                 openMainAppViaURLScheme()
+                // 不设置 errorMsg，不处理 UI 报错，直接静默跳转
+                recordState = .idle
                 return true
             }
 

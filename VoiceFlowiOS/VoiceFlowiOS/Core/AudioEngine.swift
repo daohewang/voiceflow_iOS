@@ -82,20 +82,24 @@ final class AudioEngine: @unchecked Sendable {
             return
         }
         
-        // 仅在引擎彻底停止时才重新初始化
-        engine = AVAudioEngine()
-
-        // AVAudioSession category 已在 VoiceFlowiOSApp.init() 中预配置，
-        // 此处不再重复 setCategory — 避免与 KeepAlive 冲突导致 '!int' (560557684)。
-        // 但必须调用 setActive(true) — iOS 后台可能挂起 session，
-        // 不重新激活则 engine.start() 会报 'what' (2003329396)。
+        // 强制重置 AVAudioSession Category！
+        // 因为 teardown() 中去激活后，如果系统将其重置为其他 Category（如 ambient），
+        // 此时创建的 AVAudioEngine 底层 graph 就不包含 Input，后续启动必报 2003329396。
         do {
-            try AVAudioSession.sharedInstance().setActive(true, options: [])
-            print("[AudioEngine] AVAudioSession re-activated")
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+            )
+            try session.setActive(true, options: [])
+            print("[AudioEngine] AVAudioSession freshly category-configured and activated")
         } catch {
-            print("[AudioEngine] AVAudioSession re-activate failed: \(error)")
-            // Do not throw immediately, allow fallback rebuilding.
+            print("[AudioEngine] AVAudioSession activation failed: \(error)")
         }
+
+        // 仅在彻底停止并重置 Category 完毕后，再重新初始化引擎实体
+        engine = AVAudioEngine()
 
         bufferLock.lock()
         accumulatedBuffer.removeAll()
@@ -177,6 +181,27 @@ final class AudioEngine: @unchecked Sendable {
 
         flushBuffer()
         print("[AudioEngine] Recording logically stopped (engine hardware KEPT RUNNING to retain privileges)")
+    }
+
+    // ----------------------------------------
+    // MARK: - Teardown
+    // ----------------------------------------
+
+    func teardown() {
+        if engine.isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            print("[AudioEngine] Hardware engine stopped (teardown).")
+        }
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            print("[AudioEngine] AVAudioSession deactivated.")
+        } catch {
+            print("[AudioEngine] AVAudioSession deactivate failed: \(error)")
+        }
+        self.isRecording = false
+        self.converter = nil
+        flushBuffer()
     }
 
     // ----------------------------------------

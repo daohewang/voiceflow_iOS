@@ -90,8 +90,13 @@ final class RecordingCoordinator {
         if permManager.microphoneStatus != .granted {
             let granted = await permManager.requestMicrophone()
             guard granted else {
-                print("[RC] ❌ Mic permission denied")
-                appState.updateRecordingStatus(.error("请在系统设置中开启麦克风权限"))
+                if UIApplication.shared.applicationState == .background {
+                    print("[RC] ❌ Mic permission denied. Instructing keyboard to jump.")
+                    appState.updateRecordingStatus(.error("NEEDS_JUMP"))
+                } else {
+                    print("[RC] ❌ Mic permission denied")
+                    appState.updateRecordingStatus(.error("请在系统设置中开启麦克风权限以进行录音"))
+                }
                 return
             }
         }
@@ -121,10 +126,14 @@ final class RecordingCoordinator {
             try audioEngine.startRecording()
             print("[RC] ✅ AudioEngine started")
         } catch AudioError.engineStartFailed, AudioError.audioSessionFailed {
-            // iOS blocked microphone activation from the background!
-            print("[RC] ⚠️ App is in background and iOS blocked Mic (engineStartFailed). Instructing keyboard to jump.")
-            appState.updateRecordingStatus(.error("NEEDS_JUMP"))
             isRecording = false
+            if UIApplication.shared.applicationState == .background {
+                print("[RC] ⚠️ App is in background and iOS blocked Mic (engineStartFailed). Instructing keyboard to jump.")
+                appState.updateRecordingStatus(.error("NEEDS_JUMP"))
+            } else {
+                print("[RC] ❌ AudioEngine Foreground fail.")
+                appState.updateRecordingStatus(.error("录音引擎启动异常，可能被其他应用占用"))
+            }
             SharedStore.write("recordingState", "idle")
         } catch {
             print("[RC] ❌ AudioEngine failed: \(error)")
@@ -275,6 +284,19 @@ final class RecordingCoordinator {
         appState.asrText = ""
         appState.llmText = ""
         SharedStore.write("recordingState", "idle")
+    }
+
+    /// 完全卸载录音组件（关闭硬件麦克风权限标识）
+    func teardownRecording() {
+        audioEngine.teardown()
+        LLMClient.shared.cancel()
+        isRecording = false
+        audioDataBuffer = []
+        appState.updateRecordingStatus(.idle)
+        appState.asrText = ""
+        appState.llmText = ""
+        SharedStore.write("recordingState", "idle")
+        print("[RC] Audio engine torndown.")
     }
 
     // ----------------------------------------

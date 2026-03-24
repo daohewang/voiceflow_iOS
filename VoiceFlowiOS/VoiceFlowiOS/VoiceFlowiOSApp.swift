@@ -172,6 +172,11 @@ struct VoiceFlowiOSApp: App {
             }
 
             Task { @MainActor in
+                // iOS 深层机制：即使触发了 URL Scheme，代码执行时 App 可能仍处于状态切换中（尚未完全 Active）。
+                // 若此时立刻启动音频引擎，非常容易遭遇 2003329396 后台录音限制阻拦。
+                // 因此我们延迟 500ms，确保 App 已经彻底转入前台，再安全拉起内核。
+                try? await Task.sleep(nanoseconds: 500_000_000)
+
                 await appState.startRecording()
 
                 if case .error(let msg) = appState.recordingStatus {

@@ -45,7 +45,21 @@ final class AppState {
     }
 
     /// VoiceFlow 开关（绑定到 MainToggleCard）
-    var isVoiceFlowEnabled: Bool = false
+    /// VoiceFlow 开关（绑定到 MainToggleCard）
+    var isVoiceFlowEnabled: Bool {
+        get { sharedUD.bool(forKey: "isVoiceFlowEnabled") }
+        set { 
+            let oldValue = isVoiceFlowEnabled
+            sharedUD.set(newValue, forKey: "isVoiceFlowEnabled")
+            
+            if oldValue && !newValue {
+                // 当主应用开关切到关闭时，彻底销毁底层音频引擎并停止后台保活，消除灵动岛麦克风图标
+                coordinator?.teardownRecording()
+                BackgroundKeepAlive.shared.stop()
+                print("[AppState] VoiceFlow disabled. Engine tore down and KeepAlive stopped.")
+            }
+        }
+    }
 
     /// 从键盘触发的录音（用于显示"返回键盘"引导）
     var isKeyboardRecording: Bool = false
@@ -145,6 +159,11 @@ final class AppState {
     // ----------------------------------------
 
     func startRecording() async {
+        guard isVoiceFlowEnabled else {
+            print("[AppState] VoiceFlow is disabled. Instructing keyboard to jump to main app.")
+            updateRecordingStatus(.error("NEEDS_JUMP"))
+            return
+        }
         startLiveActivity()
         await coordinator?.startRecording()
     }
