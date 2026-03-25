@@ -23,9 +23,38 @@ final class AppState {
         case restoreOnly
         case startRecording
     }
+
+    enum AutoClosePolicy: String, CaseIterable, Equatable {
+        case fiveMinutes
+        case oneHour
+        case never
+
+        var title: String {
+            switch self {
+            case .fiveMinutes:
+                return "5分钟后关闭"
+            case .oneHour:
+                return "1小时后关闭"
+            case .never:
+                return "永不关闭"
+            }
+        }
+
+        var durationSeconds: TimeInterval? {
+            switch self {
+            case .fiveMinutes:
+                return 5 * 60
+            case .oneHour:
+                return 60 * 60
+            case .never:
+                return nil
+            }
+        }
+    }
     
     // 实时活动引用
     private var liveActivity: Activity<VoiceFlowActivityAttributes>? = nil
+    private var autoCloseTask: Task<Void, Never>?
 
     // ----------------------------------------
     // MARK: - Singleton
@@ -71,7 +100,19 @@ final class AppState {
                 currentSessionSource = .none
                 print("[AppState] VoiceFlow disabled. Engine tore down and KeepAlive stopped.")
             }
-            syncSharedServiceSnapshot(reason: "voiceFlowEnabled=\(newValue)")
+            refreshSharedServiceState(reason: "voiceFlowEnabled=\(newValue)")
+        }
+    }
+
+    var autoClosePolicy: AutoClosePolicy {
+        get {
+            let raw = sharedUD.string(forKey: "voiceFlowAutoClosePolicy") ?? AutoClosePolicy.fiveMinutes.rawValue
+            return AutoClosePolicy(rawValue: raw) ?? .fiveMinutes
+        }
+        set {
+            sharedUD.set(newValue.rawValue, forKey: "voiceFlowAutoClosePolicy")
+            print("[AutoClose] policy changed to \(newValue.title)")
+            updateAutoCloseTimer(reason: "policyChanged:\(newValue.rawValue)")
         }
     }
 
@@ -169,7 +210,7 @@ final class AppState {
     private init() {
         loadHistory()
         coordinator = RecordingCoordinator(appState: self)
-        syncSharedServiceSnapshot(reason: "init")
+        refreshSharedServiceState(reason: "init")
     }
 
     // ----------------------------------------
@@ -184,7 +225,7 @@ final class AppState {
         }
         keyboardLaunchBehavior = .none
         currentSessionSource = isKeyboardRecording ? .keyboard : .mainApp
-        syncSharedServiceSnapshot(reason: "startRecording")
+        refreshSharedServiceState(reason: "startRecording")
         startLiveActivity()
         await coordinator?.startRecording()
     }
@@ -209,7 +250,7 @@ final class AppState {
         stopLiveActivity()
         keyboardLaunchBehavior = .none
         currentSessionSource = .none
-        syncSharedServiceSnapshot(reason: "cancelRecording")
+        refreshSharedServiceState(reason: "cancelRecording")
     }
 
     /// 强制重置状态（用于卡死时的手动救援）
@@ -223,11 +264,12 @@ final class AppState {
         SharedStore.write("recordingState", "idle")
         keyboardLaunchBehavior = .none
         currentSessionSource = .none
-        syncSharedServiceSnapshot(reason: "forceReset")
+        refreshSharedServiceState(reason: "forceReset")
     }
 
     func refreshSharedServiceState(reason: String) {
         syncSharedServiceSnapshot(reason: reason)
+        updateAutoCloseTimer(reason: reason)
     }
 
     func ensureArmedWarmStandbyIfNeeded(reason: String) async {
@@ -265,7 +307,7 @@ final class AppState {
             keyboardLaunchBehavior = .none
             currentSessionSource = .none
         }
-        syncSharedServiceSnapshot(reason: "recordingStatus=\(status)")
+        refreshSharedServiceState(reason: "recordingStatus=\(status)")
     }
 
     private func onRecordingStatusChanged(_ status: RecordingStatus) {
@@ -417,6 +459,65 @@ final class AppState {
     private func isErrorState(_ status: RecordingStatus) -> Bool {
         if case .error = status { return true }
         return false
+    }
+
+    private func updateAutoCloseTimer(reason: String) {
+        guard isVoiceFlowEnabled else {
+            cancelAutoClose(reason: "\(reason):voiceFlowDisabled")
+            return
+        }
+
+        guard PermissionManager.shared.microphoneStatus == .granted else {
+            cancelAutoClose(reason: "\(reason):permissionNotGranted")
+            return
+        }
+
+        switch recordingStatus {
+        case .recording, .processing:
+            cancelAutoClose(reason: "\(reason):busy")
+        case .idle, .done, .error:
+            scheduleAutoCloseIfNeeded(reason: reason)
+        }
+    }
+
+    private func scheduleAutoCloseIfNeeded(reason: String) {
+        cancelAutoClose(reason: "\(reason):reschedule")
+
+        guard let duration = autoClosePolicy.durationSeconds else {
+            print("[AutoClose] skip scheduling (\(reason)) because policy is 永不关闭")
+            return
+        }
+
+        let deadline = Date().addingTimeInterval(duration)
+        print("[AutoClose] scheduled policy=\(autoClosePolicy.title) reason=\(reason) deadline=\(deadline)")
+
+        autoCloseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            guard self.isVoiceFlowEnabled else { return }
+            guard self.permissionEligibleForArmedAutoClose else { return }
+
+            print("[AutoClose] deadline reached, disabling VoiceFlow")
+            self.isVoiceFlowEnabled = false
+        }
+    }
+
+    private func cancelAutoClose(reason: String) {
+        if autoCloseTask != nil {
+            print("[AutoClose] cancelled reason=\(reason)")
+        }
+        autoCloseTask?.cancel()
+        autoCloseTask = nil
+    }
+
+    private var permissionEligibleForArmedAutoClose: Bool {
+        guard PermissionManager.shared.microphoneStatus == .granted else { return false }
+        switch recordingStatus {
+        case .idle, .done, .error:
+            return true
+        case .recording, .processing:
+            return false
+        }
     }
 
     private func logAudioSnapshot(tag: String) {

@@ -82,6 +82,19 @@ struct AccountView: View {
                 .padding(.top, 16)
 
                 // ----------------------------------------
+                // MARK: - VoiceFlow 服务区块
+                // ----------------------------------------
+
+                AccountSectionHeader(title: "VoiceFlow 服务")
+                    .padding(.top, 24)
+
+                AccountCard {
+                    AutoClosePolicyRow()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+
+                // ----------------------------------------
                 // MARK: - 应用信息
                 // ----------------------------------------
 
@@ -405,6 +418,46 @@ private struct ASRProviderRow: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(Capsule().fill(Color(hex: "#f1f5f9")))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+    }
+}
+
+// ========================================
+// MARK: - Auto Close Policy Row
+// ========================================
+
+private struct AutoClosePolicyRow: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        @Bindable var state = appState
+
+        HStack(spacing: 16) {
+            Image(systemName: "timer")
+                .font(.system(size: 14))
+                .foregroundStyle(Color(hex: "#475569"))
+                .frame(width: 20, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("自动关闭")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color(hex: "#0f172a"))
+                Text("VoiceFlow 在待命态下的自动关闭策略")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(hex: "#64748b"))
+            }
+
+            Spacer()
+
+            Picker("自动关闭", selection: $state.autoClosePolicy) {
+                ForEach(AppState.AutoClosePolicy.allCases, id: \.self) { policy in
+                    Text(policy.title).tag(policy)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(Color(hex: "#0f172a"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
