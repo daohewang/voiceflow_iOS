@@ -7,7 +7,9 @@
  * 架构说明：
  *   AVAudioEngine 实例在整个 App 生命周期内复用，避免每次录音创建/销毁
  *   导致的音频硬件冲突（OSStatus 560557684）。
- *   stopRecording 只移除 tap 和停止引擎，不销毁实例。
+ *   stopRecording 支持两种语义：
+ *     1. keepWarm=true：仅结束本次 utterance，保留热待命链路
+ *     2. keepWarm=false：真正停止引擎并去激活 session
  *   startRecording 调用 reset() 后重新 install tap 和 start。
  */
 
@@ -66,7 +68,7 @@ final class AudioEngine: @unchecked Sendable {
 
     init() {}
 
-    deinit { stopRecording() }
+    deinit { teardown() }
 
     // ----------------------------------------
     // MARK: - Recording Control
@@ -169,21 +171,27 @@ final class AudioEngine: @unchecked Sendable {
         print("[AudioEngine] Recording started - \(inputFormat.sampleRate)Hz → 16kHz/16bit/mono")
     }
 
-    func stopRecording() {
+    func stopRecording(keepWarm: Bool = false) {
         guard isRecording else { return }
         let session = AVAudioSession.sharedInstance()
         let routeInputsBefore = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
-        print("[StopFlow][AudioEngine] stop requested, engineRunning=\(engine.isRunning), category=\(session.category.rawValue), mode=\(session.mode.rawValue), routeInputs=\(routeInputsBefore.isEmpty ? "none" : routeInputsBefore)")
+        print("[StopFlow][AudioEngine] stop requested, keepWarm=\(keepWarm), engineRunning=\(engine.isRunning), category=\(session.category.rawValue), mode=\(session.mode.rawValue), routeInputs=\(routeInputsBefore.isEmpty ? "none" : routeInputsBefore)")
 
         self.isRecording = false
+        flushBuffer()
+
+        if keepWarm {
+            let routeInputsWarm = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+            print("[ArmedState][AudioEngine] logical capture stopped, engine kept warm, engineRunning=\(engine.isRunning), routeInputs=\(routeInputsWarm.isEmpty ? "none" : routeInputsWarm)")
+            return
+        }
+
         if engine.isRunning {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             print("[StopFlow][AudioEngine] engine stopped and tap removed")
         }
         converter = nil
-
-        flushBuffer()
         do {
             try session.setActive(false, options: .notifyOthersOnDeactivation)
             let routeInputsAfter = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")

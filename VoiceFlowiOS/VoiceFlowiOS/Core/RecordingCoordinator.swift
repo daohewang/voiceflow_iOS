@@ -158,8 +158,11 @@ final class RecordingCoordinator {
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
         recordingStartTime = nil
 
-        // 停止音频采集（引擎保留供下次复用）
-        audioEngine.stopRecording()
+        // 停止本次 utterance，但在 VoiceFlow 仍开启时保留热待命链路，
+        // 让下一次键盘录音可以直接复用底层音频输入。
+        let keepWarm = appState.isVoiceFlowEnabled
+        audioEngine.stopRecording(keepWarm: keepWarm)
+        print("[ArmedState][RC] stopRecording keepWarm=\(keepWarm)")
         isRecording = false
         appState.updateRecordingStatus(.processing)
         SharedStore.write("recordingState", "processing")

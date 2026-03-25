@@ -312,8 +312,13 @@ struct VoiceFlowiOSApp: App {
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            BackgroundKeepAlive.shared.start()
-            print("[App] Entered background — keepalive started")
+            if appState.isVoiceFlowEnabled {
+                BackgroundKeepAlive.shared.start()
+                print("[App] Entered background — keepalive started")
+            } else {
+                BackgroundKeepAlive.shared.stop()
+                print("[App] Entered background — keepalive skipped because VoiceFlow is disabled")
+            }
         case .active:
             // 如果键盘正在录音中（或者处于 AI 处理中），不要停止保活，否则会导致录音中断
             if appState.recordingStatus == .idle {

@@ -264,7 +264,13 @@ final class AppState {
                 }
             }
             isKeyboardRecording = false
-            BackgroundKeepAlive.shared.start()
+            if isVoiceFlowEnabled {
+                BackgroundKeepAlive.shared.start()
+                print("[ArmedState] KeepAlive resumed after done")
+            } else {
+                BackgroundKeepAlive.shared.stop()
+                print("[ArmedState] KeepAlive remained stopped after done because VoiceFlow is disabled")
+            }
 
         case .error(let msg):
             if isKeyboardRecording {
@@ -274,7 +280,13 @@ final class AppState {
             }
             isKeyboardRecording = false
             postDarwin(kVoiceFlowRecordingStopped)
-            BackgroundKeepAlive.shared.start()
+            if isVoiceFlowEnabled {
+                BackgroundKeepAlive.shared.start()
+                print("[ArmedState] KeepAlive resumed after error")
+            } else {
+                BackgroundKeepAlive.shared.stop()
+                print("[ArmedState] KeepAlive remained stopped after error because VoiceFlow is disabled")
+            }
 
         case .idle:
             break
