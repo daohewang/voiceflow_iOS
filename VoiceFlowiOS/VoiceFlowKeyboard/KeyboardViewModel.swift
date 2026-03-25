@@ -71,6 +71,12 @@ final class KeyboardViewModel {
         case processing
     }
 
+    private enum SharedPermissionSnapshot: String {
+        case notDetermined
+        case granted
+        case denied
+    }
+
     weak var inputVC: UIInputViewController?
 
     // ----------------------------------------
@@ -258,6 +264,16 @@ final class KeyboardViewModel {
         print("[KeyboardVM] ACK received — main app alive, waiting for recording")
     }
 
+    private func readSharedPermissionSnapshot() -> SharedPermissionSnapshot? {
+        guard let raw = sharedRead("recordPermissionSnapshot") else { return nil }
+        return SharedPermissionSnapshot(rawValue: raw)
+    }
+
+    private func readSharedServiceState() -> SharedServiceState? {
+        guard let raw = sharedRead("serviceState") else { return nil }
+        return SharedServiceState(rawValue: raw)
+    }
+
     // ----------------------------------------
     // MARK: - 读取并消费待插入结果
     // ----------------------------------------
@@ -281,7 +297,7 @@ final class KeyboardViewModel {
             
             if errMsg == "NEEDS_JUMP" {
                 print("[KeyboardVM] Main app requested URL Scheme jump due to background mic block.")
-                openMainAppViaURLScheme()
+                openMainAppViaURLScheme(host: "startRecording")
                 // 不设置 errorMsg，不处理 UI 报错，直接静默跳转
                 recordState = .idle
                 return true
@@ -360,6 +376,49 @@ final class KeyboardViewModel {
         displayText = ""
         errorMsg = nil
         ackReceived = false
+
+        let permissionSnapshot = readSharedPermissionSnapshot()
+        let serviceState = readSharedServiceState()
+        print("[KeyboardDecision] tapRecord permission=\(permissionSnapshot?.rawValue ?? "nil") serviceState=\(serviceState?.rawValue ?? "nil") current=\(recordState)")
+
+        switch permissionSnapshot {
+        case .granted:
+            break
+        case .notDetermined, .denied, .none:
+            print("[KeyboardDecision] action=openMainAppForPermissionRecovery")
+            openMainAppViaURLScheme(host: "restoreVoiceFlow")
+            return
+        }
+
+        switch serviceState {
+        case .disabledByUser:
+            print("[KeyboardDecision] action=openMainAppForVoiceFlowRestore")
+            openMainAppViaURLScheme(host: "restoreVoiceFlow")
+            return
+        case .disabledBySystemPermission:
+            print("[KeyboardDecision] action=openMainAppForPermissionRecovery")
+            openMainAppViaURLScheme(host: "restoreVoiceFlow")
+            return
+        case .recording:
+            print("[KeyboardDecision] action=attachExistingRecording")
+            recordState = .recording
+            displayText = "正在录音..."
+            return
+        case .processing:
+            print("[KeyboardDecision] action=blockDuringProcessing")
+            recordState = .processing
+            displayText = "处理中..."
+            errorMsg = "上一段仍在处理中，请稍后"
+            startProcessingTimeout()
+            return
+        case .armed:
+            break
+        case .none:
+            print("[KeyboardDecision] action=openMainAppForUnknownStateRecovery")
+            openMainAppViaURLScheme(host: "restoreVoiceFlow")
+            return
+        }
+
         sharedRemove("pendingResult")
         sharedRemove("audioLevel")
         sharedRemove("recordingState")  // 清除上次残留的状态文件
@@ -373,15 +432,15 @@ final class KeyboardViewModel {
             CFNotificationCenterGetDarwinNotifyCenter(),
             kRequestStart, nil, nil, true
         )
-        print("[KeyboardVM] Sent Darwin requestStart")
+        print("[KeyboardDecision] action=requestStartViaDarwin")
 
         // 600ms 超时：若无 ACK → 主App极可能被睡眠/杀死，兜底 URL Scheme
         ackTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard let self, !Task.isCancelled,
                   self.recordState == .waitingMainApp, !self.ackReceived else { return }
-            print("[KeyboardVM] No ACK in 600ms, falling back to URL Scheme")
-            self.openMainAppViaURLScheme()
+            print("[KeyboardDecision] noACKFallback=openMainAppForStartRecording")
+            self.openMainAppViaURLScheme(host: "startRecording")
         }
 
         startRecoveryTimeout()
@@ -426,15 +485,16 @@ final class KeyboardViewModel {
         }
     }
 
-    /// URL Scheme 兜底：跳转主 App 前台启动录音
+    /// URL Scheme 兜底：跳转主 App 做恢复或启动
     /// Extension 进程没有 UIApplication.shared，必须通过 extensionContext 或 selector 打开 URL
-    private func openMainAppViaURLScheme() {
-        guard let url = URL(string: "voiceflow://startRecording") else {
+    private func openMainAppViaURLScheme(host: String) {
+        guard let url = URL(string: "voiceflow://\(host)") else {
             errorMsg = "无法打开主应用"
             recordState = .idle
             return
         }
 
+        print("[KeyboardDecision] openURL=\(url.absoluteString)")
         displayText = "跳转中..."
 
         // 优先使用 extensionContext（官方 API，需要 Full Access）

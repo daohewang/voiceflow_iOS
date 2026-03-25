@@ -162,6 +162,7 @@ struct VoiceFlowiOSApp: App {
             appState.selectedTab = .home
             appState.isVoiceFlowEnabled = true
             appState.isKeyboardRecording = true
+            appState.keyboardLaunchBehavior = .startRecording
 
             // 仅在麦克风权限已授予时直接启动录音
             // 未授权 → ContentView 会显示 PermissionOnboardingView，
@@ -184,6 +185,20 @@ struct VoiceFlowiOSApp: App {
                     saveErrorAndNotifyKeyboard(msg)
                     appState.isKeyboardRecording = false
                 }
+            }
+
+        case "restoreVoiceFlow":
+            print("[App] ▶️ restoreVoiceFlow triggered from keyboard (URL Scheme)")
+            appState.selectedTab = .home
+            appState.isKeyboardRecording = true
+            appState.keyboardLaunchBehavior = .restoreOnly
+            appState.isVoiceFlowEnabled = true
+
+            let permission = AVAudioSession.sharedInstance().recordPermission
+            if permission == .granted {
+                print("[App] VoiceFlow restored to armed — waiting for user to return to keyboard")
+            } else {
+                print("[App] VoiceFlow restore requires microphone permission — showing onboarding")
             }
 
         case "stopRecording":

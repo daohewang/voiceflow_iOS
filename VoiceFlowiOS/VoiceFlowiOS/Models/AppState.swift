@@ -17,6 +17,12 @@ import UIKit
 @MainActor
 @Observable
 final class AppState {
+
+    enum KeyboardLaunchBehavior: Equatable {
+        case none
+        case restoreOnly
+        case startRecording
+    }
     
     // 实时活动引用
     private var liveActivity: Activity<VoiceFlowActivityAttributes>? = nil
@@ -61,6 +67,7 @@ final class AppState {
                 // 当主应用开关切到关闭时，彻底销毁底层音频引擎并停止后台保活，消除灵动岛麦克风图标
                 coordinator?.teardownRecording()
                 BackgroundKeepAlive.shared.stop()
+                keyboardLaunchBehavior = .none
                 currentSessionSource = .none
                 print("[AppState] VoiceFlow disabled. Engine tore down and KeepAlive stopped.")
             }
@@ -70,6 +77,7 @@ final class AppState {
 
     /// 从键盘触发的录音（用于显示"返回键盘"引导）
     var isKeyboardRecording: Bool = false
+    var keyboardLaunchBehavior: KeyboardLaunchBehavior = .none
     private var currentSessionSource: SharedStore.SessionSource = .none
 
     // ----------------------------------------
@@ -173,6 +181,7 @@ final class AppState {
             updateRecordingStatus(.error("NEEDS_JUMP"))
             return
         }
+        keyboardLaunchBehavior = .none
         currentSessionSource = isKeyboardRecording ? .keyboard : .mainApp
         syncSharedServiceSnapshot(reason: "startRecording")
         startLiveActivity()
@@ -193,6 +202,7 @@ final class AppState {
     func cancelRecording() {
         coordinator?.cancelRecording()
         stopLiveActivity()
+        keyboardLaunchBehavior = .none
         currentSessionSource = .none
         syncSharedServiceSnapshot(reason: "cancelRecording")
     }
@@ -206,6 +216,7 @@ final class AppState {
         asrText = ""
         llmText = ""
         SharedStore.write("recordingState", "idle")
+        keyboardLaunchBehavior = .none
         currentSessionSource = .none
         syncSharedServiceSnapshot(reason: "forceReset")
     }
@@ -221,6 +232,7 @@ final class AppState {
         recordingStatus = status
         onRecordingStatusChanged(status)
         if status == .done || status == .idle || isErrorState(status) {
+            keyboardLaunchBehavior = .none
             currentSessionSource = .none
         }
         syncSharedServiceSnapshot(reason: "recordingStatus=\(status)")

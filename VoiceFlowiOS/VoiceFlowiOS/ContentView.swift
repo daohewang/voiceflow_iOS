@@ -30,8 +30,8 @@ struct ContentView: View {
             } else {
                 PermissionOnboardingView {
                     permissionsReady = true
-                    // 键盘唤起后授权完成 → 自动启动录音
-                    if appState.isKeyboardRecording {
+                    // 键盘唤起后，只有“真正开始录音”场景才在授权完成后自动起录。
+                    if appState.isKeyboardRecording && appState.keyboardLaunchBehavior == .startRecording {
                         Task { await appState.startRecording() }
                     }
                 }
@@ -212,6 +212,26 @@ private struct PermissionRow: View {
 // ========================================
 
 private struct ReturnGuideView: View {
+    @Environment(AppState.self) private var appState
+
+    private var titleText: String {
+        switch appState.keyboardLaunchBehavior {
+        case .restoreOnly:
+            return "VoiceFlow 已恢复"
+        case .none, .startRecording:
+            return "录音已在后台开启"
+        }
+    }
+
+    private var subtitleText: String {
+        switch appState.keyboardLaunchBehavior {
+        case .restoreOnly:
+            return "请点击屏幕左上角的返回按钮\n回到语音输入键盘继续录音"
+        case .none, .startRecording:
+            return "请点击屏幕左上角的返回按钮\n回到聊天输入界面"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -222,10 +242,10 @@ private struct ReturnGuideView: View {
                 .foregroundStyle(.blue)
                 .padding(.bottom, 20)
             
-            Text("录音已在后台开启")
+            Text(titleText)
                 .font(.system(size: 24, weight: .bold))
             
-            Text("请点击屏幕左上角的返回按钮\n回到聊天输入界面")
+            Text(subtitleText)
                 .font(.system(size: 16))
                 .foregroundStyle(Color(hex: "#71717a"))
                 .multilineTextAlignment(.center)
