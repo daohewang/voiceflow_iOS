@@ -35,6 +35,7 @@ final class RecordingCoordinator {
     // ----------------------------------------
 
     private(set) var isRecording: Bool = false
+    var isWarmStandbyReady: Bool { audioEngine.isWarmStandbyReady }
     private var currentSessionId: UUID = UUID()
     private var recordingStartTime: Date?
     private var lastAudioLevelShareTime: Date = .distantPast
@@ -210,9 +211,10 @@ final class RecordingCoordinator {
 
         let finalText = asrText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !finalText.isEmpty else {
-            print("[RC] No text recognized")
-            appState.updateRecordingStatus(.idle)
+            print("[RC] ❌ No text recognized")
+            appState.updateRecordingStatus(.error("未识别到语音，请重试"))
             SharedStore.write("recordingState", "idle")
+            appState.updateLiveActivityStatus("未识别到语音")
             return
         }
 

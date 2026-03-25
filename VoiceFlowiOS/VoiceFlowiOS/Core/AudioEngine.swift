@@ -52,6 +52,7 @@ final class AudioEngine: @unchecked Sendable {
 
     private(set) var isRecording = false
     private(set) var currentLevel: Float = 0.0
+    var isWarmStandbyReady: Bool { engine.isRunning }
 
     // ----------------------------------------
     // MARK: - Buffer Management

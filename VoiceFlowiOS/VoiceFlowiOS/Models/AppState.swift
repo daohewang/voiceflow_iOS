@@ -160,6 +160,7 @@ final class AppState {
     // ----------------------------------------
 
     private var coordinator: RecordingCoordinator?
+    var isBackgroundCaptureReady: Bool { coordinator?.isWarmStandbyReady ?? false }
 
     // ----------------------------------------
     // MARK: - Init
@@ -189,6 +190,10 @@ final class AppState {
     }
 
     func stopRecording() async {
+        guard case .recording = recordingStatus else {
+            print("[StopFlow] stop ignored because status=\(recordingStatus)")
+            return
+        }
         print("[StopFlow] user requested stop, status=\(recordingStatus), isKeyboardRecording=\(isKeyboardRecording)")
         logAudioSnapshot(tag: "before_stop")
         stopLiveActivity()

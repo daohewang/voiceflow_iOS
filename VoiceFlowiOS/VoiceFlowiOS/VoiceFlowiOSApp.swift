@@ -130,6 +130,10 @@ struct VoiceFlowiOSApp: App {
                         print("[App] Already recording/processing, ignoring duplicate requestStart")
                         return
                     }
+                    guard AppState.shared.isBackgroundCaptureReady else {
+                        print("[App] requestStart received in background but armed state is cold — no ACK, let keyboard fallback URL")
+                        return
+                    }
                     // 立即 ACK — 让键盘知道主 App 存活
                     CFNotificationCenterPostNotification(
                         CFNotificationCenterGetDarwinNotifyCenter(),
