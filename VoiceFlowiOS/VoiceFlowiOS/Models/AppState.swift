@@ -221,6 +221,10 @@ final class AppState {
         syncSharedServiceSnapshot(reason: "forceReset")
     }
 
+    func refreshSharedServiceState(reason: String) {
+        syncSharedServiceSnapshot(reason: reason)
+    }
+
     // ----------------------------------------
     // MARK: - 录音状态变更 + Darwin IPC
     // ----------------------------------------

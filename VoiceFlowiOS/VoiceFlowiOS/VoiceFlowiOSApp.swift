@@ -50,6 +50,7 @@ struct VoiceFlowiOSApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
+                .environment(PermissionManager.shared)
                 .onOpenURL { url in handleOpenURL(url) }
                 .preferredColorScheme(.light)
                 .onChange(of: scenePhase) { _, newPhase in

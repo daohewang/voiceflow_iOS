@@ -14,6 +14,7 @@ import SwiftUI
 struct MainToggleCard: View {
 
     @Environment(AppState.self) private var appState
+    @Environment(PermissionManager.self) private var permissionManager
 
     var body: some View {
         @Bindable var state = appState
@@ -45,12 +46,11 @@ struct MainToggleCard: View {
                     get: { appState.isVoiceFlowEnabled },
                     set: { enabled in
                         appState.isVoiceFlowEnabled = enabled
-                        Task {
-                            if enabled {
-                                await appState.startRecording()
-                            } else {
-                                await appState.stopRecording()
-                            }
+                        if enabled {
+                            permissionManager.refreshStatus()
+                            appState.refreshSharedServiceState(reason: "mainToggleEnabled")
+                        } else {
+                            appState.forceReset()
                         }
                     }
                 ))
@@ -125,29 +125,22 @@ struct MainToggleCard: View {
                 .shadow(color: .black.opacity(0.01), radius: 5, x: 0, y: 4)
         )
         .padding(.horizontal, 16)
-        // 同步 isVoiceFlowEnabled 与 isRecording 状态
-        .onChange(of: appState.isRecording) { _, isRecording in
-            if !isRecording && appState.isVoiceFlowEnabled {
-                // 录音已停止（可能因错误），同步关闭开关
-                if case .error(_) = appState.recordingStatus {
-                    appState.isVoiceFlowEnabled = false
-                }
-            }
-        }
     }
 
     private var statusDescription: String {
         switch appState.recordingStatus {
         case .idle:
             return appState.isVoiceFlowEnabled
-                ? "正在实时优化您的语音输入。"
-                : "点击开启 VoiceFlow 语音输入功能。"
+                ? "VoiceFlow 正在待命，可从键盘直接发起语音输入。"
+                : "点击开启 VoiceFlow 常驻待命服务。"
         case .recording:
             return "正在录音并实时识别语音..."
         case .processing:
             return "AI 正在润色识别结果..."
         case .done:
-            return "已完成，文本已复制到剪贴板。"
+            return appState.isVoiceFlowEnabled
+                ? "本次处理已完成，VoiceFlow 已恢复待命。"
+                : "本次处理已完成。"
         case .error(let msg):
             return "错误：\(msg)"
         }
@@ -186,6 +179,7 @@ struct BlackToggleStyle: ToggleStyle {
 #Preview {
     MainToggleCard()
         .environment(AppState.shared)
+        .environment(PermissionManager.shared)
         .padding()
         .background(Color(hex: "#fcfcfc"))
 }

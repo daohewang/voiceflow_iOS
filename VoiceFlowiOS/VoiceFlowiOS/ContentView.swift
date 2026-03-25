@@ -15,6 +15,7 @@ import AVFoundation
 struct ContentView: View {
 
     @Environment(AppState.self) private var appState
+    @Environment(PermissionManager.self) private var permissionManager
     @State private var permissionsReady = false
 
     var body: some View {
@@ -38,6 +39,8 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            permissionManager.refreshStatus()
+            appState.refreshSharedServiceState(reason: "contentView.onAppear")
             // 权限已授予 → 跳过引导
             if AVAudioSession.sharedInstance().recordPermission == .granted {
                 permissionsReady = true
@@ -49,6 +52,7 @@ struct ContentView: View {
             if isRecording && AVAudioSession.sharedInstance().recordPermission == .granted {
                 permissionsReady = true
             }
+            appState.refreshSharedServiceState(reason: "contentView.isKeyboardRecording=\(isRecording)")
         }
     }
 }
@@ -85,6 +89,8 @@ private struct TabContentView: View {
 // ========================================
 
 private struct PermissionOnboardingView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(PermissionManager.self) private var permissionManager
     let onComplete: () -> Void
 
     @State private var micGranted = false
@@ -105,13 +111,14 @@ private struct PermissionOnboardingView: View {
             }
             .padding(.bottom, 24)
 
-            Text("VoiceFlow")
+            Text(titleText)
                 .font(.system(size: 28, weight: .bold))
                 .padding(.bottom, 8)
 
-            Text("语音输入，智能润色")
+            Text(subtitleText)
                 .font(.system(size: 16))
                 .foregroundStyle(Color(hex: "#71717a"))
+                .multilineTextAlignment(.center)
                 .padding(.bottom, 40)
 
             // 麦克风权限状态
@@ -151,7 +158,27 @@ private struct PermissionOnboardingView: View {
         return "开启权限"
     }
 
+    private var titleText: String {
+        switch appState.keyboardLaunchBehavior {
+        case .restoreOnly:
+            return "恢复 VoiceFlow"
+        case .none, .startRecording:
+            return "VoiceFlow"
+        }
+    }
+
+    private var subtitleText: String {
+        switch appState.keyboardLaunchBehavior {
+        case .restoreOnly:
+            return "需要恢复系统麦克风权限后，才能重新进入 VoiceFlow 待命状态。"
+        case .none, .startRecording:
+            return "语音输入，智能润色"
+        }
+    }
+
     private func refreshStatus() {
+        permissionManager.refreshStatus()
+        appState.refreshSharedServiceState(reason: "permissionOnboarding.refreshStatus")
         micGranted = AVAudioSession.sharedInstance().recordPermission == .granted
         if micGranted { onComplete() }
     }
@@ -162,6 +189,8 @@ private struct PermissionOnboardingView: View {
             DispatchQueue.main.async {
                 micGranted = granted
                 isRequesting = false
+                permissionManager.refreshStatus()
+                appState.refreshSharedServiceState(reason: "permissionOnboarding.requestResult=\(granted)")
                 if granted { onComplete() }
             }
         }
@@ -266,4 +295,5 @@ private struct ReturnGuideView: View {
 #Preview {
     ContentView()
         .environment(AppState.shared)
+        .environment(PermissionManager.shared)
 }
