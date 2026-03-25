@@ -230,6 +230,27 @@ final class AppState {
         syncSharedServiceSnapshot(reason: reason)
     }
 
+    func ensureArmedWarmStandbyIfNeeded(reason: String) async {
+        guard isVoiceFlowEnabled else {
+            print("[ArmedState] warm standby skipped (\(reason)) because VoiceFlow is disabled")
+            return
+        }
+        guard recordingStatus == .idle || recordingStatus == .done || isErrorState(recordingStatus) else {
+            print("[ArmedState] warm standby skipped (\(reason)) because status=\(recordingStatus)")
+            return
+        }
+
+        PermissionManager.shared.refreshStatus()
+        guard PermissionManager.shared.microphoneStatus == .granted else {
+            print("[ArmedState] warm standby skipped (\(reason)) because mic permission is \(PermissionManager.shared.microphoneStatus)")
+            syncSharedServiceSnapshot(reason: "warmStandbySkipped:\(reason)")
+            return
+        }
+
+        coordinator?.ensureWarmStandbyIfPossible()
+        syncSharedServiceSnapshot(reason: "warmStandby:\(reason)")
+    }
+
     // ----------------------------------------
     // MARK: - 录音状态变更 + Darwin IPC
     // ----------------------------------------

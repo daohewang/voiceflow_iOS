@@ -122,6 +122,44 @@ final class AudioEngine: @unchecked Sendable {
         self.isRecording = true
     }
 
+    func ensureWarmStandby() throws {
+        guard !isRecording else {
+            print("[ArmedState][AudioEngine] warm standby skipped because recording is active")
+            return
+        }
+        guard !engine.isRunning else {
+            print("[ArmedState][AudioEngine] warm standby already active")
+            return
+        }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+            )
+            try session.setActive(true, options: [])
+            print("[ArmedState][AudioEngine] AVAudioSession activated for warm standby")
+        } catch {
+            print("[ArmedState][AudioEngine] session activation failed during warm standby: \(error)")
+            throw AudioError.audioSessionFailed
+        }
+
+        engine = AVAudioEngine()
+        bufferLock.lock()
+        accumulatedBuffer.removeAll()
+        bufferLock.unlock()
+
+        do {
+            try configureAndStartEngine()
+            print("[ArmedState][AudioEngine] warm standby started successfully")
+        } catch {
+            print("[ArmedState][AudioEngine] warm standby failed: \(error)")
+            throw error
+        }
+    }
+
     // ----------------------------------------
     // MARK: - Engine Setup (可重试)
     // ----------------------------------------

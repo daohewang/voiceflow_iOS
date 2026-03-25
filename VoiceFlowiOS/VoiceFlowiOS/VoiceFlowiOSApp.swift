@@ -202,6 +202,9 @@ struct VoiceFlowiOSApp: App {
             let permission = AVAudioSession.sharedInstance().recordPermission
             if permission == .granted {
                 print("[App] VoiceFlow restored to armed — waiting for user to return to keyboard")
+                Task { @MainActor in
+                    await appState.ensureArmedWarmStandbyIfNeeded(reason: "restoreVoiceFlow")
+                }
             } else {
                 print("[App] VoiceFlow restore requires microphone permission — showing onboarding")
             }
@@ -330,6 +333,9 @@ struct VoiceFlowiOSApp: App {
                 print("[App] Entered active — keepalive stopped")
             } else {
                 print("[App] Entered active — keepalive maintained for ongoing recording")
+            }
+            Task { @MainActor in
+                await appState.ensureArmedWarmStandbyIfNeeded(reason: "sceneActive")
             }
         default:
             break

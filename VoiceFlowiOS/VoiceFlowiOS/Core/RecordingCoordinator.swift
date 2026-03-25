@@ -144,6 +144,27 @@ final class RecordingCoordinator {
         }
     }
 
+    func ensureWarmStandbyIfPossible() {
+        guard !isRecording else {
+            print("[ArmedState][RC] warm standby skipped because recording is active")
+            return
+        }
+
+        let permManager = PermissionManager.shared
+        permManager.checkMicrophoneStatus()
+        guard permManager.microphoneStatus == .granted else {
+            print("[ArmedState][RC] warm standby skipped because mic permission is \(permManager.microphoneStatus)")
+            return
+        }
+
+        do {
+            try audioEngine.ensureWarmStandby()
+            print("[ArmedState][RC] warm standby is ready")
+        } catch {
+            print("[ArmedState][RC] warm standby failed: \(error)")
+        }
+    }
+
     // ----------------------------------------
     // MARK: - 停止录音
     // ----------------------------------------

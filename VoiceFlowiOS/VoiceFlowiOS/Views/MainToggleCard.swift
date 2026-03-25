@@ -49,6 +49,9 @@ struct MainToggleCard: View {
                         if enabled {
                             permissionManager.refreshStatus()
                             appState.refreshSharedServiceState(reason: "mainToggleEnabled")
+                            Task {
+                                await appState.ensureArmedWarmStandbyIfNeeded(reason: "mainToggleEnabled")
+                            }
                         } else {
                             appState.forceReset()
                         }
