@@ -49,7 +49,10 @@ final class AppState {
     /// VoiceFlow 开关（绑定到 MainToggleCard）
     /// VoiceFlow 开关（绑定到 MainToggleCard）
     var isVoiceFlowEnabled: Bool {
-        get { sharedUD.bool(forKey: "isVoiceFlowEnabled") }
+        get {
+            guard sharedUD.object(forKey: "isVoiceFlowEnabled") != nil else { return true }
+            return sharedUD.bool(forKey: "isVoiceFlowEnabled")
+        }
         set { 
             let oldValue = isVoiceFlowEnabled
             sharedUD.set(newValue, forKey: "isVoiceFlowEnabled")
@@ -58,13 +61,16 @@ final class AppState {
                 // 当主应用开关切到关闭时，彻底销毁底层音频引擎并停止后台保活，消除灵动岛麦克风图标
                 coordinator?.teardownRecording()
                 BackgroundKeepAlive.shared.stop()
+                currentSessionSource = .none
                 print("[AppState] VoiceFlow disabled. Engine tore down and KeepAlive stopped.")
             }
+            syncSharedServiceSnapshot(reason: "voiceFlowEnabled=\(newValue)")
         }
     }
 
     /// 从键盘触发的录音（用于显示"返回键盘"引导）
     var isKeyboardRecording: Bool = false
+    private var currentSessionSource: SharedStore.SessionSource = .none
 
     // ----------------------------------------
     // MARK: - Text State
@@ -154,6 +160,7 @@ final class AppState {
     private init() {
         loadHistory()
         coordinator = RecordingCoordinator(appState: self)
+        syncSharedServiceSnapshot(reason: "init")
     }
 
     // ----------------------------------------
@@ -166,6 +173,8 @@ final class AppState {
             updateRecordingStatus(.error("NEEDS_JUMP"))
             return
         }
+        currentSessionSource = isKeyboardRecording ? .keyboard : .mainApp
+        syncSharedServiceSnapshot(reason: "startRecording")
         startLiveActivity()
         await coordinator?.startRecording()
     }
@@ -184,6 +193,8 @@ final class AppState {
     func cancelRecording() {
         coordinator?.cancelRecording()
         stopLiveActivity()
+        currentSessionSource = .none
+        syncSharedServiceSnapshot(reason: "cancelRecording")
     }
 
     /// 强制重置状态（用于卡死时的手动救援）
@@ -195,6 +206,8 @@ final class AppState {
         asrText = ""
         llmText = ""
         SharedStore.write("recordingState", "idle")
+        currentSessionSource = .none
+        syncSharedServiceSnapshot(reason: "forceReset")
     }
 
     // ----------------------------------------
@@ -207,6 +220,10 @@ final class AppState {
     func updateRecordingStatus(_ status: RecordingStatus) {
         recordingStatus = status
         onRecordingStatusChanged(status)
+        if status == .done || status == .idle || isErrorState(status) {
+            currentSessionSource = .none
+        }
+        syncSharedServiceSnapshot(reason: "recordingStatus=\(status)")
     }
 
     private func onRecordingStatusChanged(_ status: RecordingStatus) {
@@ -309,6 +326,43 @@ final class AppState {
             await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
             print("[StopFlow] Live Activity stop finished")
         }
+    }
+
+    private func syncSharedServiceSnapshot(reason: String) {
+        let permissionStatus = PermissionManager.shared.microphoneStatus
+        let serviceState: SharedStore.ServiceState
+
+        if !isVoiceFlowEnabled {
+            serviceState = .disabledByUser
+        } else if permissionStatus != .granted {
+            serviceState = .disabledBySystemPermission
+        } else {
+            switch recordingStatus {
+            case .recording:
+                serviceState = .recording
+            case .processing:
+                serviceState = .processing
+            case .idle, .done, .error:
+                serviceState = .armed
+            }
+        }
+
+        SharedStore.writeServiceState(serviceState)
+        SharedStore.write("voiceFlowEnabled", isVoiceFlowEnabled ? "true" : "false")
+        let sharedSource: SharedStore.SessionSource
+        switch serviceState {
+        case .recording, .processing:
+            sharedSource = currentSessionSource
+        default:
+            sharedSource = .none
+        }
+        SharedStore.writeSessionSource(sharedSource)
+        print("[ServiceState] synced reason=\(reason), serviceState=\(serviceState.rawValue), permission=\(permissionStatus), voiceFlowEnabled=\(isVoiceFlowEnabled), sessionSource=\(sharedSource.rawValue)")
+    }
+
+    private func isErrorState(_ status: RecordingStatus) -> Bool {
+        if case .error = status { return true }
+        return false
     }
 
     private func logAudioSnapshot(tag: String) {

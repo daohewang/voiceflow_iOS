@@ -63,6 +63,14 @@ private func sharedRemove(_ key: String) {
 @Observable
 final class KeyboardViewModel {
 
+    private enum SharedServiceState: String {
+        case disabledByUser
+        case disabledBySystemPermission
+        case armed
+        case recording
+        case processing
+    }
+
     weak var inputVC: UIInputViewController?
 
     // ----------------------------------------
@@ -107,6 +115,23 @@ final class KeyboardViewModel {
     private func recoverState() {
         // 先检查有没有待插入的结果
         if consumePendingResult() { return }
+
+        if let rawServiceState = sharedRead("serviceState"),
+           let serviceState = SharedServiceState(rawValue: rawServiceState) {
+            switch serviceState {
+            case .recording:
+                recordState = .recording
+                displayText = "正在录音..."
+            case .processing:
+                recordState = .processing
+                displayText = "处理中..."
+            case .armed, .disabledByUser, .disabledBySystemPermission:
+                recordState = .idle
+                displayText = ""
+            }
+            print("[KeyboardVM] Recovered shared serviceState: \(serviceState.rawValue)")
+            return
+        }
 
         // 检查录音是否在进行中
         if let state = sharedRead("recordingState") {

@@ -18,6 +18,26 @@ import Foundation
 
 enum SharedStore {
 
+    enum ServiceState: String {
+        case disabledByUser
+        case disabledBySystemPermission
+        case armed
+        case recording
+        case processing
+    }
+
+    enum PermissionSnapshot: String {
+        case notDetermined
+        case granted
+        case denied
+    }
+
+    enum SessionSource: String {
+        case none
+        case keyboard
+        case mainApp
+    }
+
     private static let groupID = "group.com.swordsmanye.voiceflow.ios"
 
     private static var containerURL: URL? {
@@ -51,5 +71,32 @@ enum SharedStore {
     static func remove(_ key: String) {
         guard let url = containerURL?.appendingPathComponent("vf_\(key).txt") else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    static func writeServiceState(_ state: ServiceState) {
+        write("serviceState", state.rawValue)
+    }
+
+    static func readServiceState() -> ServiceState? {
+        guard let raw = read("serviceState") else { return nil }
+        return ServiceState(rawValue: raw)
+    }
+
+    static func writePermissionSnapshot(_ snapshot: PermissionSnapshot) {
+        write("recordPermissionSnapshot", snapshot.rawValue)
+    }
+
+    static func readPermissionSnapshot() -> PermissionSnapshot? {
+        guard let raw = read("recordPermissionSnapshot") else { return nil }
+        return PermissionSnapshot(rawValue: raw)
+    }
+
+    static func writeSessionSource(_ source: SessionSource) {
+        write("sessionSource", source.rawValue)
+    }
+
+    static func readSessionSource() -> SessionSource? {
+        guard let raw = read("sessionSource") else { return nil }
+        return SessionSource(rawValue: raw)
     }
 }

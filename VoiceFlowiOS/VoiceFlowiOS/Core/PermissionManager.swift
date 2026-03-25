@@ -48,6 +48,7 @@ final class PermissionManager {
             AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
                 Task { @MainActor [weak self] in
                     self?.microphoneStatus = granted ? .granted : .denied
+                    self?.syncSharedSnapshot()
                     cont.resume(returning: granted)
                 }
             }
@@ -62,5 +63,19 @@ final class PermissionManager {
         case .undetermined:  microphoneStatus = .notDetermined
         @unknown default:    microphoneStatus = .notDetermined
         }
+        syncSharedSnapshot()
+    }
+
+    private func syncSharedSnapshot() {
+        let snapshot: SharedStore.PermissionSnapshot
+        switch microphoneStatus {
+        case .notDetermined:
+            snapshot = .notDetermined
+        case .granted:
+            snapshot = .granted
+        case .denied:
+            snapshot = .denied
+        }
+        SharedStore.writePermissionSnapshot(snapshot)
     }
 }
