@@ -7,6 +7,8 @@
 
 import ActivityKit
 import SwiftUI
+import AVFoundation
+import UIKit
 
 // ========================================
 // MARK: - App State
@@ -169,8 +171,14 @@ final class AppState {
     }
 
     func stopRecording() async {
-        await coordinator?.stopRecording()
+        print("[StopFlow] user requested stop, status=\(recordingStatus), isKeyboardRecording=\(isKeyboardRecording)")
+        logAudioSnapshot(tag: "before_stop")
         stopLiveActivity()
+        BackgroundKeepAlive.shared.stop()
+        logAudioSnapshot(tag: "after_live_activity_and_keepalive_stop")
+        scheduleStopFlowSnapshots()
+        await coordinator?.stopRecording()
+        logAudioSnapshot(tag: "after_coordinator_stop")
     }
 
     func cancelRecording() {
@@ -208,10 +216,7 @@ final class AppState {
 
         case .processing:
             postDarwin(kVoiceFlowRecordingStopped)
-            // CRITICAL FIX: The app audioEngine is stopped during processing.
-            // If the app is in the background, iOS will suspend it immediately because 
-            // the audio session is no longer active. We MUST start KeepAlive to retain the audio bus!
-            BackgroundKeepAlive.shared.start()
+            print("[StopFlow] KeepAlive skipped during processing; relying on background task")
 
         case .done:
             if isKeyboardRecording {
@@ -290,15 +295,40 @@ final class AppState {
     }
 
     private func stopLiveActivity() {
-        guard let activity = liveActivity else { return }
+        guard let activity = liveActivity else {
+            print("[StopFlow] Live Activity already nil")
+            return
+        }
         // 同步置 nil — 防止 startLiveActivity 在 Task 完成前误判为无活动
         self.liveActivity = nil
         SharedStore.write("liveActivityActive", "false")
+        print("[StopFlow] Live Activity stop requested")
 
         Task {
             let finalState = VoiceFlowActivityAttributes.ContentState(status: "录制结束", startTime: Date())
             await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
-            print("[AppState] 🛑 Live Activity stopped")
+            print("[StopFlow] Live Activity stop finished")
+        }
+    }
+
+    private func logAudioSnapshot(tag: String) {
+        let session = AVAudioSession.sharedInstance()
+        let routeInputs = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        print("[StopFlow][Snapshot] tag=\(tag), appState=\(UIApplication.shared.applicationState.rawValue), recordingStatus=\(recordingStatus), keepalive=\(BackgroundKeepAlive.shared.isActive), liveActivity=\(liveActivity != nil), category=\(session.category.rawValue), mode=\(session.mode.rawValue), routeInputs=\(routeInputs.isEmpty ? "none" : routeInputs)")
+    }
+
+    private func scheduleStopFlowSnapshots() {
+        let delays: [(String, UInt64)] = [
+            ("+100ms", 100_000_000),
+            ("+500ms", 500_000_000),
+            ("+1000ms", 1_000_000_000)
+        ]
+
+        for (label, delay) in delays {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: delay)
+                self?.logAudioSnapshot(tag: label)
+            }
         }
     }
 

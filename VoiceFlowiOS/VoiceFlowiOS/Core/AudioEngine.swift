@@ -171,16 +171,26 @@ final class AudioEngine: @unchecked Sendable {
 
     func stopRecording() {
         guard isRecording else { return }
+        let session = AVAudioSession.sharedInstance()
+        let routeInputsBefore = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        print("[StopFlow][AudioEngine] stop requested, engineRunning=\(engine.isRunning), category=\(session.category.rawValue), mode=\(session.mode.rawValue), routeInputs=\(routeInputsBefore.isEmpty ? "none" : routeInputsBefore)")
 
-        // DO NOT stop the engine or remove the tap!
-        // We must keep the hardware actively running 24/7 to maintain background mic privileges 
-        // given by iOS when the app was previously in the foreground!
-        // We only mute it logically.
-        
         self.isRecording = false
+        if engine.isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            print("[StopFlow][AudioEngine] engine stopped and tap removed")
+        }
+        converter = nil
 
         flushBuffer()
-        print("[AudioEngine] Recording logically stopped (engine hardware KEPT RUNNING to retain privileges)")
+        do {
+            try session.setActive(false, options: .notifyOthersOnDeactivation)
+            let routeInputsAfter = session.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+            print("[StopFlow][AudioEngine] session deactivated, engineRunning=\(engine.isRunning), routeInputs=\(routeInputsAfter.isEmpty ? "none" : routeInputsAfter)")
+        } catch {
+            print("[StopFlow][AudioEngine] session deactivate failed: \(error)")
+        }
     }
 
     // ----------------------------------------
