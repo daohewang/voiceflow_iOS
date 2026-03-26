@@ -110,6 +110,7 @@ final class AppState {
                 coordinator?.teardownRecording()
                 BackgroundKeepAlive.shared.stop()
                 keyboardLaunchBehavior = .none
+                pendingRestoreWarmStandby = false
                 currentSessionSource = .none
                 print("[AppState] VoiceFlow disabled. Engine tore down and KeepAlive stopped.")
             }
@@ -132,6 +133,7 @@ final class AppState {
     /// 从键盘触发的录音（用于显示"返回键盘"引导）
     var isKeyboardRecording: Bool = false
     var keyboardLaunchBehavior: KeyboardLaunchBehavior = .none
+    var pendingRestoreWarmStandby: Bool = false
     private var currentSessionSource: SharedStore.SessionSource = .none
 
     // ----------------------------------------
@@ -259,6 +261,7 @@ final class AppState {
     func cancelRecording() {
         coordinator?.cancelRecording()
         keyboardLaunchBehavior = .none
+        pendingRestoreWarmStandby = false
         currentSessionSource = .none
         refreshSharedServiceState(reason: "cancelRecording")
     }
@@ -272,6 +275,7 @@ final class AppState {
         llmText = ""
         SharedStore.write("recordingState", "idle")
         keyboardLaunchBehavior = .none
+        pendingRestoreWarmStandby = false
         currentSessionSource = .none
         refreshSharedServiceState(reason: "forceReset")
     }
