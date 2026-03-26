@@ -168,6 +168,8 @@ struct VoiceFlowiOSApp: App {
             appState.isVoiceFlowEnabled = true
             appState.isKeyboardRecording = true
             appState.keyboardLaunchBehavior = .startRecording
+            SharedStore.write("recordingState", "starting")
+            print("[App] URL startRecording marked shared recordingState=starting")
 
             // 仅在麦克风权限已授予时直接启动录音
             // 未授权 → ContentView 会显示 PermissionOnboardingView，
@@ -182,6 +184,7 @@ struct VoiceFlowiOSApp: App {
                 // 若此时立刻启动音频引擎，非常容易遭遇 2003329396 后台录音限制阻拦。
                 // 因此我们延迟 500ms，确保 App 已经彻底转入前台，再安全拉起内核。
                 try? await Task.sleep(nanoseconds: 500_000_000)
+                print("[App] URL startRecording delayed task fired")
 
                 await appState.startRecording()
 
@@ -271,6 +274,7 @@ struct VoiceFlowiOSApp: App {
         SharedStore.write("pendingResult", "ERROR:\(error)")
         SharedStore.write("recordingState", "idle")
         postDarwinNotification(kVoiceFlowResultReady)
+        print("[App] Posted resultReady notification for error")
     }
 
     // ----------------------------------------

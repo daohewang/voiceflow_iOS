@@ -122,6 +122,14 @@ final class KeyboardViewModel {
         // 先检查有没有待插入的结果
         if consumePendingResult() { return }
 
+        if let state = sharedRead("recordingState"), state == "starting" {
+            recordState = .waitingMainApp
+            displayText = "准备录音..."
+            startRecoveryTimeout()
+            print("[KeyboardVM] Recovered transient state: starting -> waitingMainApp")
+            return
+        }
+
         if let rawServiceState = sharedRead("serviceState"),
            let serviceState = SharedServiceState(rawValue: rawServiceState) {
             switch serviceState {
@@ -150,6 +158,11 @@ final class KeyboardViewModel {
                 recordState = .processing
                 displayText = "处理中..."
                 print("[KeyboardVM] Recovered state: processing")
+            case "starting":
+                recordState = .waitingMainApp
+                displayText = "准备录音..."
+                startRecoveryTimeout()
+                print("[KeyboardVM] Recovered state: starting -> waitingMainApp")
             case "done":
                 // 上一次录音已完成但结果可能已被消费，视为 idle
                 sharedRemove("recordingState")
