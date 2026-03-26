@@ -239,7 +239,6 @@ final class AppState {
         keyboardLaunchBehavior = .none
         currentSessionSource = isKeyboardRecording ? .keyboard : .mainApp
         refreshSharedServiceState(reason: "startRecording")
-        startLiveActivity()
         await coordinator?.startRecording()
     }
 
@@ -250,7 +249,6 @@ final class AppState {
         }
         print("[StopFlow] user requested stop, status=\(recordingStatus), isKeyboardRecording=\(isKeyboardRecording)")
         logAudioSnapshot(tag: "before_stop")
-        stopLiveActivity()
         BackgroundKeepAlive.shared.stop()
         logAudioSnapshot(tag: "after_live_activity_and_keepalive_stop")
         scheduleStopFlowSnapshots()
@@ -260,7 +258,6 @@ final class AppState {
 
     func cancelRecording() {
         coordinator?.cancelRecording()
-        stopLiveActivity()
         keyboardLaunchBehavior = .none
         currentSessionSource = .none
         refreshSharedServiceState(reason: "cancelRecording")
@@ -270,7 +267,6 @@ final class AppState {
     func forceReset() {
         print("[AppState] ⚠️ Force Reset triggered")
         coordinator?.cancelRecording()
-        stopLiveActivity()
         recordingStatus = .idle
         asrText = ""
         llmText = ""
@@ -389,54 +385,26 @@ final class AppState {
     // ----------------------------------------
 
     func updateLiveActivityStatus(_ status: String) {
-        // 先捕获引用，避免 Task 执行时 liveActivity 已被置 nil
-        guard let activity = liveActivity else { return }
+        let mode = liveActivityMode(for: recordingStatus)
         Task {
-            let updatedState = VoiceFlowActivityAttributes.ContentState(status: status, startTime: Date())
-            await activity.update(ActivityContent(state: updatedState, staleDate: nil))
+            await reconcileLiveActivity(reason: "statusUpdate:\(status)", forcedMode: mode)
             print("[AppState] 🔄 Live Activity updated: \(status)")
-        }
-    }
-
-    private func startLiveActivity() {
-        guard liveActivity == nil else { return }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("[AppState] Live Activities are disabled by user or system.")
-            return
-        }
-
-        let attributes = VoiceFlowActivityAttributes(sessionName: "Recording Session")
-        let initialContentState = VoiceFlowActivityAttributes.ContentState(status: "正在录音...", startTime: Date())
-
-        do {
-            let activity = try Activity.request(
-                attributes: attributes,
-                content: .init(state: initialContentState, staleDate: nil),
-                pushType: nil
-            )
-            self.liveActivity = activity
-            SharedStore.write("liveActivityActive", "true")
-            SharedStore.write("hasStartedLiveActivityBefore", "true")
-            print("[AppState] ✅ Live Activity started: \(activity.id)")
-        } catch {
-            print("[AppState] ❌ Failed to start Live Activity: \(error)")
         }
     }
 
     private func stopLiveActivity() {
         guard let activity = liveActivity else {
-            print("[StopFlow] Live Activity already nil")
+            print("[LiveActivity] stop skipped because activity is nil")
             return
         }
-        // 同步置 nil — 防止 startLiveActivity 在 Task 完成前误判为无活动
         self.liveActivity = nil
         SharedStore.write("liveActivityActive", "false")
-        print("[StopFlow] Live Activity stop requested")
+        print("[LiveActivity] stop requested")
 
         Task {
-            let finalState = VoiceFlowActivityAttributes.ContentState(status: "录制结束", startTime: Date())
+            let finalState = VoiceFlowActivityAttributes.ContentState(mode: .armed, startTime: Date())
             await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
-            print("[StopFlow] Live Activity stop finished")
+            print("[LiveActivity] stop finished")
         }
     }
 
@@ -470,6 +438,65 @@ final class AppState {
         }
         SharedStore.writeSessionSource(sharedSource)
         print("[ServiceState] synced reason=\(reason), serviceState=\(serviceState.rawValue), permission=\(permissionStatus), voiceFlowEnabled=\(isVoiceFlowEnabled), sessionSource=\(sharedSource.rawValue)")
+        Task { @MainActor [weak self] in
+            await self?.reconcileLiveActivity(reason: reason)
+        }
+    }
+
+    private func reconcileLiveActivity(reason: String, forcedMode: VoiceFlowActivityAttributes.LiveActivityMode? = nil) async {
+        guard isVoiceFlowEnabled, PermissionManager.shared.microphoneStatus == .granted else {
+            if liveActivity != nil {
+                print("[LiveActivity] reconcile=\(reason) -> stop (service disabled or permission unavailable)")
+                stopLiveActivity()
+            }
+            return
+        }
+
+        guard let mode = forcedMode ?? liveActivityMode(for: recordingStatus) else {
+            if liveActivity != nil {
+                print("[LiveActivity] reconcile=\(reason) -> stop (no visible mode)")
+                stopLiveActivity()
+            }
+            return
+        }
+
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("[LiveActivity] reconcile=\(reason) skipped because activities are disabled")
+            return
+        }
+
+        let contentState = VoiceFlowActivityAttributes.ContentState(mode: mode, startTime: Date())
+        if let activity = liveActivity {
+            await activity.update(ActivityContent(state: contentState, staleDate: nil))
+            print("[LiveActivity] updated mode=\(mode.rawValue) reason=\(reason)")
+            return
+        }
+
+        do {
+            let activity = try Activity.request(
+                attributes: VoiceFlowActivityAttributes(sessionName: "VoiceFlow"),
+                content: .init(state: contentState, staleDate: nil),
+                pushType: nil
+            )
+            self.liveActivity = activity
+            SharedStore.write("liveActivityActive", "true")
+            SharedStore.write("hasStartedLiveActivityBefore", "true")
+            print("[LiveActivity] started mode=\(mode.rawValue) reason=\(reason) id=\(activity.id)")
+        } catch {
+            print("[LiveActivity] failed to start mode=\(mode.rawValue) reason=\(reason): \(error)")
+        }
+    }
+
+    private func liveActivityMode(for status: RecordingStatus) -> VoiceFlowActivityAttributes.LiveActivityMode? {
+        guard isVoiceFlowEnabled, PermissionManager.shared.microphoneStatus == .granted else { return nil }
+        switch status {
+        case .recording:
+            return .recording
+        case .processing:
+            return .processing
+        case .idle, .done, .error:
+            return .armed
+        }
     }
 
     private func isErrorState(_ status: RecordingStatus) -> Bool {

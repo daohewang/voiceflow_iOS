@@ -2,12 +2,16 @@ import ActivityKit
 import Foundation
 
 struct VoiceFlowActivityAttributes: ActivityAttributes {
+    enum LiveActivityMode: String, Codable, Hashable {
+        case armed
+        case recording
+        case processing
+    }
+
     public struct ContentState: Codable, Hashable {
-        // Dynamic state: e.g., how long we've been recording or current status text
-        var status: String
+        var mode: LiveActivityMode
         var startTime: Date
     }
 
-    // Static data: e.g., user name or session ID
     var sessionName: String
 }
