@@ -436,8 +436,9 @@ final class RecordingCoordinator {
         UsageStats.shared.recordSession(durationSeconds: max(1, durationSeconds), characterCount: text.count)
         appState.addHistoryEntry(asrText: asrText, finalText: text, durationSeconds: durationSeconds)
 
-        appState.updateRecordingStatus(.done)
         appState.llmText = text
+        print("[RC] Final result source: \(text == asrText ? "asr" : "llm")")
+        appState.updateRecordingStatus(.done)
         appState.clipboardCopied = true
         appState.updateLiveActivityStatus("词句已润色")
         SharedStore.write("recordingState", "done")
