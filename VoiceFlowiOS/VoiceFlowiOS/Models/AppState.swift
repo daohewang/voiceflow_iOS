@@ -241,6 +241,11 @@ final class AppState {
         keyboardLaunchBehavior = .none
         currentSessionSource = isKeyboardRecording ? .keyboard : .mainApp
         refreshSharedServiceState(reason: "startRecording")
+        guard isVoiceFlowEnabled else {
+            print("[AppState] VoiceFlow auto-closed before startRecording could proceed.")
+            updateRecordingStatus(.error("NEEDS_JUMP"))
+            return
+        }
         await coordinator?.startRecording()
     }
 
@@ -282,10 +287,12 @@ final class AppState {
 
     func refreshSharedServiceState(reason: String) {
         syncSharedServiceSnapshot(reason: reason)
+        reconcileAutoCloseIfNeeded(reason: reason)
         updateAutoCloseTimer(reason: reason)
     }
 
     func ensureArmedWarmStandbyIfNeeded(reason: String) async {
+        reconcileAutoCloseIfNeeded(reason: "ensureWarmStandby:\(reason)")
         guard isVoiceFlowEnabled else {
             print("[ArmedState] warm standby skipped (\(reason)) because VoiceFlow is disabled")
             return
@@ -304,6 +311,10 @@ final class AppState {
 
         coordinator?.ensureWarmStandbyIfPossible()
         syncSharedServiceSnapshot(reason: "warmStandby:\(reason)")
+    }
+
+    func reconcileAutoCloseFromLifecycle(reason: String) {
+        reconcileAutoCloseIfNeeded(reason: reason)
     }
 
     // ----------------------------------------
@@ -544,25 +555,17 @@ final class AppState {
             return
         }
 
+        if let persistedDeadline = SharedStore.readAutoCloseDeadline(),
+           persistedDeadline > Date() {
+            scheduleAutoCloseTask(deadline: persistedDeadline, reason: "\(reason):restorePersisted")
+            return
+        }
+
         cancelAutoClose(reason: "\(reason):reschedule")
 
         let deadline = Date().addingTimeInterval(duration)
-        autoCloseDeadline = deadline
-        autoCloseScheduledPolicy = autoClosePolicy
-        print("[AutoClose] scheduled policy=\(autoClosePolicy.title) reason=\(reason) deadline=\(deadline)")
-
-        autoCloseTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
-            guard let self, !Task.isCancelled else { return }
-            guard self.isVoiceFlowEnabled else { return }
-            guard self.permissionEligibleForArmedAutoClose else { return }
-
-            print("[AutoClose] deadline reached, disabling VoiceFlow")
-            self.autoCloseTask = nil
-            self.autoCloseDeadline = nil
-            self.autoCloseScheduledPolicy = nil
-            self.isVoiceFlowEnabled = false
-        }
+        SharedStore.writeAutoCloseDeadline(deadline)
+        scheduleAutoCloseTask(deadline: deadline, reason: reason)
     }
 
     private func cancelAutoClose(reason: String) {
@@ -573,6 +576,7 @@ final class AppState {
         autoCloseTask = nil
         autoCloseDeadline = nil
         autoCloseScheduledPolicy = nil
+        SharedStore.removeAutoCloseDeadline()
     }
 
     private var permissionEligibleForArmedAutoClose: Bool {
@@ -582,6 +586,58 @@ final class AppState {
             return true
         case .recording, .processing:
             return false
+        }
+    }
+
+    private func reconcileAutoCloseIfNeeded(reason: String) {
+        guard isVoiceFlowEnabled else {
+            SharedStore.removeAutoCloseDeadline()
+            return
+        }
+
+        guard permissionEligibleForArmedAutoClose else { return }
+
+        guard let persistedDeadline = SharedStore.readAutoCloseDeadline() else { return }
+
+        let now = Date()
+        if persistedDeadline <= now {
+            print("[AutoClose] persisted deadline expired reason=\(reason) deadline=\(persistedDeadline)")
+            autoCloseTask?.cancel()
+            autoCloseTask = nil
+            autoCloseDeadline = nil
+            autoCloseScheduledPolicy = nil
+            SharedStore.removeAutoCloseDeadline()
+            isVoiceFlowEnabled = false
+            return
+        }
+
+        if autoCloseTask == nil || autoCloseDeadline != persistedDeadline || autoCloseScheduledPolicy != autoClosePolicy {
+            scheduleAutoCloseTask(deadline: persistedDeadline, reason: "\(reason):reconcile")
+        }
+    }
+
+    private func scheduleAutoCloseTask(deadline: Date, reason: String) {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return }
+
+        autoCloseTask?.cancel()
+        autoCloseDeadline = deadline
+        autoCloseScheduledPolicy = autoClosePolicy
+        SharedStore.writeAutoCloseDeadline(deadline)
+        print("[AutoClose] scheduled policy=\(autoClosePolicy.title) reason=\(reason) deadline=\(deadline)")
+
+        autoCloseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            guard self.isVoiceFlowEnabled else { return }
+            guard self.permissionEligibleForArmedAutoClose else { return }
+
+            print("[AutoClose] deadline reached, disabling VoiceFlow")
+            self.autoCloseTask = nil
+            self.autoCloseDeadline = nil
+            self.autoCloseScheduledPolicy = nil
+            SharedStore.removeAutoCloseDeadline()
+            self.isVoiceFlowEnabled = false
         }
     }
 

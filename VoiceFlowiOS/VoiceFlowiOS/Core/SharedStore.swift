@@ -99,4 +99,18 @@ enum SharedStore {
         guard let raw = read("sessionSource") else { return nil }
         return SessionSource(rawValue: raw)
     }
+
+    static func writeAutoCloseDeadline(_ date: Date) {
+        write("autoCloseDeadline", String(date.timeIntervalSince1970))
+    }
+
+    static func readAutoCloseDeadline() -> Date? {
+        guard let raw = read("autoCloseDeadline"),
+              let timestamp = TimeInterval(raw) else { return nil }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    static func removeAutoCloseDeadline() {
+        remove("autoCloseDeadline")
+    }
 }

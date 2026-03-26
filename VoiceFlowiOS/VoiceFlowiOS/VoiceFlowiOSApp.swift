@@ -337,6 +337,7 @@ struct VoiceFlowiOSApp: App {
                 print("[App] Entered active — keepalive maintained for ongoing recording")
             }
             Task { @MainActor in
+                appState.reconcileAutoCloseFromLifecycle(reason: "sceneActive")
                 if appState.pendingRestoreWarmStandby {
                     print("[App] sceneActive detected pending restore warm standby — delaying warmup")
                     try? await Task.sleep(nanoseconds: 350_000_000)
