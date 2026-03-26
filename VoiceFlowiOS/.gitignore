@@ -26,3 +26,10 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Local research docs
+specs/iOS 语音输入法技术调研.md
+specs/真机测试问题诊断_2026-03-25.md
+specs/解决APP录音二次启动失败.md
+specs/语音输入法实现方案研究.md
+specs/键盘录音优化研究.md
