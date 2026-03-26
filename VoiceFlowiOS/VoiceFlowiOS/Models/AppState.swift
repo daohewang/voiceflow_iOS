@@ -397,13 +397,14 @@ final class AppState {
             print("[LiveActivity] stop skipped because activity is nil")
             return
         }
+        nonisolated(unsafe) let currentActivity = activity
         self.liveActivity = nil
         SharedStore.write("liveActivityActive", "false")
         print("[LiveActivity] stop requested")
 
         Task {
             let finalState = VoiceFlowActivityAttributes.ContentState(mode: .armed, startTime: Date())
-            await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
+            await currentActivity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
             print("[LiveActivity] stop finished")
         }
     }
@@ -467,7 +468,8 @@ final class AppState {
 
         let contentState = VoiceFlowActivityAttributes.ContentState(mode: mode, startTime: Date())
         if let activity = liveActivity {
-            await activity.update(ActivityContent(state: contentState, staleDate: nil))
+            nonisolated(unsafe) let currentActivity = activity
+            await currentActivity.update(ActivityContent(state: contentState, staleDate: nil))
             print("[LiveActivity] updated mode=\(mode.rawValue) reason=\(reason)")
             return
         }
