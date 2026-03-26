@@ -293,7 +293,7 @@ final class RecordingCoordinator {
             guard let self, self.currentSessionId == sessionId else { return }
             if case .processing = self.appState.recordingStatus {
                 print("[RC] ⚠️ Total processing timeout (ASR/LLM), forcing idle")
-                self.appState.updateRecordingStatus(.error("任务处理超时，请重试"))
+                self.appState.updateRecordingStatus(.error("语音处理超时，请重试"))
                 SharedStore.write("recordingState", "idle")
                 self.appState.updateLiveActivityStatus("处理超时")
             }

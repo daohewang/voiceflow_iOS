@@ -334,12 +334,13 @@ final class AppState {
             if isKeyboardRecording {
                 let result = llmText.isEmpty ? asrText : llmText
                 if !result.isEmpty {
+                    print("[AppState][Result] writing keyboard result chars=\(result.count), source=\(currentSessionSource.rawValue)")
                     SharedStore.write("pendingResult", result)
                     SharedStore.write("recordingState", "done")
                     let readBack = SharedStore.read("pendingResult")
-                    print("[AppState] Result write verify: \(readBack != nil ? "OK (\(readBack!.count) chars)" : "FAILED")")
+                    print("[AppState][Result] write verify: \(readBack != nil ? "OK (\(readBack!.count) chars)" : "FAILED")")
                     postDarwin(kVoiceFlowResultReady)
-                    print("[AppState] Posted resultReady")
+                    print("[AppState][Result] posted resultReady")
                 }
             }
             isKeyboardRecording = false
@@ -353,9 +354,11 @@ final class AppState {
 
         case .error(let msg):
             if isKeyboardRecording {
+                print("[AppState][Result] writing keyboard error payload: \(msg)")
                 SharedStore.write("pendingResult", "ERROR:\(msg)")
                 SharedStore.write("recordingState", "idle")
                 postDarwin(kVoiceFlowResultReady)
+                print("[AppState][Result] posted resultReady for error")
             }
             isKeyboardRecording = false
             postDarwin(kVoiceFlowRecordingStopped)

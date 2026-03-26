@@ -169,6 +169,8 @@ struct BlackToggleStyle: ToggleStyle {
                     .offset(x: isOn ? 10 : -10)
                     .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
             }
+            .frame(width: 68, height: 44)
+            .contentShape(Rectangle())
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isOn)
         }
         .buttonStyle(.plain)

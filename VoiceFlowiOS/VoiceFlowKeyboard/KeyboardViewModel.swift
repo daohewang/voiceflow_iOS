@@ -234,7 +234,7 @@ final class KeyboardViewModel {
     }
 
     private func onResultReady() {
-        print("[KeyboardVM] Result ready notification received")
+        print("[KeyboardVM][Inject] resultReady notification received, recordState=\(recordState), sharedState=\(sharedRead("recordingState") ?? "nil")")
         processingTimeoutTask?.cancel()
         if !consumePendingResult() {
             // 文件 I/O 可能尚未落盘，短暂重试
@@ -242,7 +242,7 @@ final class KeyboardViewModel {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self else { return }
                 if !self.consumePendingResult() {
-                    print("[KeyboardVM] ⚠️ resultReady fired but no pending result after retry")
+                    print("[KeyboardVM][Inject] ⚠️ resultReady fired but no pending result after retry, sharedState=\(sharedRead("recordingState") ?? "nil")")
                     self.recordState = .idle
                 }
             }
@@ -282,11 +282,11 @@ final class KeyboardViewModel {
     @discardableResult
     private func consumePendingResult() -> Bool {
         guard let result = sharedRead("pendingResult"), !result.isEmpty else {
-            print("[KeyboardVM] No pending result")
+            print("[KeyboardVM][Inject] no pending result")
             return false
         }
 
-        print("[KeyboardVM] Found result: \(result.prefix(50))...")
+        print("[KeyboardVM][Inject] found pending result chars=\(result.count), sharedState=\(sharedRead("recordingState") ?? "nil")")
 
         // 错误消息
         if result.hasPrefix("ERROR:") {
@@ -296,7 +296,7 @@ final class KeyboardViewModel {
             let errMsg = String(result.dropFirst(6))
             
             if errMsg == "NEEDS_JUMP" {
-                print("[KeyboardVM] Main app requested URL Scheme jump due to background mic block.")
+                print("[KeyboardVM][Inject] main app requested URL Scheme jump due to background mic block")
                 openMainAppViaURLScheme(host: "startRecording")
                 // 不设置 errorMsg，不处理 UI 报错，直接静默跳转
                 recordState = .idle
@@ -306,24 +306,25 @@ final class KeyboardViewModel {
             errorMsg = errMsg
             displayText = ""
             recordState = .idle
-            print("[KeyboardVM] Error from main app: \(errorMsg ?? "")")
+            print("[KeyboardVM][Inject] error payload consumed: \(errorMsg ?? "")")
             return true
         }
 
         // 确保 inputVC 存在才能插入
         guard let vc = inputVC else {
-            print("[KeyboardVM] ⚠️ inputVC is nil, keeping result for later")
+            print("[KeyboardVM][Inject] ⚠️ inputVC is nil, keeping result for later")
             return false  // 不删数据，等 viewWillAppear 时重试
         }
 
         // 先插入，再清除
+        print("[KeyboardVM][Inject] inserting text chars=\(result.count)")
         vc.textDocumentProxy.insertText(result)
         sharedRemove("pendingResult")
         sharedRemove("recordingState")
         displayText = result
         recordState = .idle
         audioLevel = 0
-        print("[KeyboardVM] ✅ Inserted: \(result.prefix(50))...")
+        print("[KeyboardVM][Inject] ✅ insertText completed")
         return true
     }
 
@@ -478,11 +479,21 @@ final class KeyboardViewModel {
             guard self.recordState == .processing else { return }
             // 超时前最后尝试读取结果
             if self.consumePendingResult() { return }
-            print("[KeyboardVM] ⚠️ Processing timeout — resetting to idle")
-            self.errorMsg = "处理超时，请重试"
+            let sharedState = sharedRead("recordingState") ?? "nil"
+            let hasPendingResult = (sharedRead("pendingResult")?.isEmpty == false)
+            let inputVCMissing = self.inputVC == nil
+            print("[KeyboardVM][Timeout] processing timeout sharedState=\(sharedState) hasPendingResult=\(hasPendingResult) inputVCNil=\(inputVCMissing)")
+            self.errorMsg = self.processingTimeoutMessage(sharedState: sharedState, hasPendingResult: hasPendingResult, inputVCMissing: inputVCMissing)
             self.recordState = .idle
             self.displayText = ""
         }
+    }
+
+    private func processingTimeoutMessage(sharedState: String, hasPendingResult: Bool, inputVCMissing: Bool) -> String {
+        if inputVCMissing || hasPendingResult || sharedState == "done" {
+            return "结果回填超时，请返回键盘重试"
+        }
+        return "语音处理超时，请重试"
     }
 
     /// URL Scheme 兜底：跳转主 App 做恢复或启动
