@@ -25,12 +25,19 @@ final class AppState {
     }
 
     enum AutoClosePolicy: String, CaseIterable, Equatable {
+#if DEBUG
+        case thirtySeconds
+#endif
         case fiveMinutes
         case oneHour
         case never
 
         var title: String {
             switch self {
+#if DEBUG
+            case .thirtySeconds:
+                return "30秒后关闭"
+#endif
             case .fiveMinutes:
                 return "5分钟后关闭"
             case .oneHour:
@@ -42,6 +49,10 @@ final class AppState {
 
         var durationSeconds: TimeInterval? {
             switch self {
+#if DEBUG
+            case .thirtySeconds:
+                return 30
+#endif
             case .fiveMinutes:
                 return 5 * 60
             case .oneHour:
