@@ -13,6 +13,16 @@
 
 import Foundation
 import UIKit
+import OSLog
+
+@inline(__always)
+func keyboardLog(_ message: String) {
+    KeyboardDebugLog.logger.debug("\(message, privacy: .public)")
+}
+
+enum KeyboardDebugLog {
+    static let logger = Logger(subsystem: "com.swordsmanye.voiceflow.keyboard", category: "lifecycle")
+}
 
 // ========================================
 // MARK: - Darwin Notification Names
@@ -39,7 +49,7 @@ private func sharedContainerURL() -> URL? {
 
 private func sharedRead(_ key: String) -> String? {
     guard let url = sharedContainerURL()?.appendingPathComponent("vf_\(key).txt") else {
-        print("[KeyboardVM] ❌ containerURL is nil")
+        keyboardLog("[KeyboardVM] ❌ containerURL is nil")
         return nil
     }
     return try? String(contentsOf: url, encoding: .utf8)
@@ -62,6 +72,7 @@ private func sharedRemove(_ key: String) {
 @MainActor
 @Observable
 final class KeyboardViewModel {
+    nonisolated(unsafe) private static var activeInstanceID: UUID?
 
     private enum SharedServiceState: String {
         case disabledByUser
@@ -78,6 +89,7 @@ final class KeyboardViewModel {
     }
 
     weak var inputVC: UIInputViewController?
+    private let instanceID = UUID()
 
     // ----------------------------------------
     // MARK: - State
@@ -100,6 +112,7 @@ final class KeyboardViewModel {
 
     init(inputVC: UIInputViewController) {
         self.inputVC = inputVC
+        becomeActive(reason: "init")
         setupDarwinObservers()
         recoverState()
     }
@@ -110,7 +123,10 @@ final class KeyboardViewModel {
         CFNotificationCenterRemoveEveryObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), ptr
         )
-        print("[KeyboardVM] Observers removed in deinit")
+        if Self.activeInstanceID == instanceID {
+            Self.activeInstanceID = nil
+        }
+        keyboardLog("[KeyboardVM] Observers removed in deinit")
     }
 
     // ----------------------------------------
@@ -119,62 +135,76 @@ final class KeyboardViewModel {
 
     /// 键盘进程被重建后，从共享文件恢复当前录音状态
     private func recoverState() {
+        becomeActive(reason: "recoverState")
         // 先检查有没有待插入的结果
         if consumePendingResult() { return }
 
-        if let state = sharedRead("recordingState"), state == "starting" {
-            recordState = .waitingMainApp
-            displayText = "准备录音..."
-            startRecoveryTimeout()
-            print("[KeyboardVM] Recovered transient state: starting -> waitingMainApp")
-            return
-        }
+        let sharedRecordingState = sharedRead("recordingState")
 
         if let rawServiceState = sharedRead("serviceState"),
            let serviceState = SharedServiceState(rawValue: rawServiceState) {
             switch serviceState {
             case .recording:
+                cancelPendingStartupWaiters(reason: "recoverState:serviceState=recording")
                 recordState = .recording
                 displayText = "正在录音..."
             case .processing:
+                cancelPendingStartupWaiters(reason: "recoverState:serviceState=processing")
                 recordState = .processing
                 displayText = "处理中..."
-            case .armed, .disabledByUser, .disabledBySystemPermission:
+            case .armed:
+                if sharedRecordingState == "starting" {
+                    recordState = .waitingMainApp
+                    displayText = "准备录音..."
+                    startRecoveryTimeout()
+                    keyboardLog("[KeyboardVM] Recovered serviceState=armed with shared starting -> waitingMainApp")
+                } else {
+                    cancelPendingStartupWaiters(reason: "recoverState:serviceState=armed")
+                    recordState = .idle
+                    displayText = ""
+                }
+            case .disabledByUser, .disabledBySystemPermission:
+                cancelPendingStartupWaiters(reason: "recoverState:serviceState=\(serviceState.rawValue)")
                 recordState = .idle
                 displayText = ""
             }
-            print("[KeyboardVM] Recovered shared serviceState: \(serviceState.rawValue)")
+            keyboardLog("[KeyboardVM] Recovered shared serviceState: \(serviceState.rawValue)")
             return
         }
 
         // 检查录音是否在进行中
-        if let state = sharedRead("recordingState") {
+        if let state = sharedRecordingState {
             switch state {
             case "recording":
+                cancelPendingStartupWaiters(reason: "recoverState:recordingState=recording")
                 recordState = .recording
                 displayText = "正在录音..."
-                print("[KeyboardVM] Recovered state: recording")
+                keyboardLog("[KeyboardVM] Recovered state: recording")
             case "processing":
+                cancelPendingStartupWaiters(reason: "recoverState:recordingState=processing")
                 recordState = .processing
                 displayText = "处理中..."
-                print("[KeyboardVM] Recovered state: processing")
+                keyboardLog("[KeyboardVM] Recovered state: processing")
             case "starting":
                 recordState = .waitingMainApp
                 displayText = "准备录音..."
                 startRecoveryTimeout()
-                print("[KeyboardVM] Recovered state: starting -> waitingMainApp")
+                keyboardLog("[KeyboardVM] Recovered state: starting -> waitingMainApp")
             case "done":
                 // 上一次录音已完成但结果可能已被消费，视为 idle
                 sharedRemove("recordingState")
+                cancelPendingStartupWaiters(reason: "recoverState:recordingState=done")
                 recordState = .idle
-                print("[KeyboardVM] Recovered state: done → treated as idle")
+                keyboardLog("[KeyboardVM] Recovered state: done → treated as idle")
             default:
-                print("[KeyboardVM] Recovered state: idle (\(state))")
+                cancelPendingStartupWaiters(reason: "recoverState:recordingState=\(state)")
+                keyboardLog("[KeyboardVM] Recovered state: idle (\(state))")
                 recordState = .idle
                 displayText = ""
             }
         } else {
-            print("[KeyboardVM] No shared state file")
+            cancelPendingStartupWaiters(reason: "recoverState:noSharedState")
+            keyboardLog("[KeyboardVM] No shared state file")
             recordState = .idle
             displayText = ""
         }
@@ -219,34 +249,77 @@ final class KeyboardViewModel {
         for (name, callback) in pairs {
             CFNotificationCenterAddObserver(center, ptr, callback, name.rawValue, nil, .deliverImmediately)
         }
-        print("[KeyboardVM] Darwin observers registered")
+        keyboardLog("[KeyboardVM] Darwin observers registered")
+    }
+
+    private var isActiveInstance: Bool {
+        Self.activeInstanceID == instanceID
+    }
+
+    private func becomeActive(reason: String) {
+        Self.activeInstanceID = instanceID
+        keyboardLog("[KeyboardVM] Became active instance reason=\(reason)")
+    }
+
+    func suspendInactiveInstance(reason: String) {
+        if Self.activeInstanceID == instanceID {
+            Self.activeInstanceID = nil
+        }
+        ackTimeoutTask?.cancel()
+        recoveryTask?.cancel()
+        processingTimeoutTask?.cancel()
+        ackTimeoutTask = nil
+        recoveryTask = nil
+        processingTimeoutTask = nil
+        keyboardLog("[KeyboardVM] Suspended instance reason=\(reason)")
     }
 
     // ----------------------------------------
     // MARK: - Darwin Notification Handlers
     // ----------------------------------------
 
-    private func onRecordingStarted() {
+    private func cancelPendingStartupWaiters(reason: String) {
+        ackTimeoutTask?.cancel()
         recoveryTask?.cancel()
-        print("[KeyboardVM] Recording started")
+        ackTimeoutTask = nil
+        recoveryTask = nil
+        keyboardLog("[KeyboardVM] Cleared startup waiters reason=\(reason)")
+    }
+
+    private func onRecordingStarted() {
+        guard isActiveInstance else {
+            keyboardLog("[KeyboardVM] Ignored recordingStarted for stale instance")
+            return
+        }
+        cancelPendingStartupWaiters(reason: "recordingStarted")
+        keyboardLog("[KeyboardVM] Recording started")
         recordState = .recording
         displayText = "正在录音..."
         errorMsg = nil
     }
 
     private func onRecordingStopped() {
+        guard isActiveInstance else {
+            keyboardLog("[KeyboardVM] Ignored recordingStopped for stale instance")
+            return
+        }
         print("[KeyboardVM] Recording stopped (current state: \(recordState))")
         // 仅在录音状态下才转为处理中，防止收到上一次会话的迟到通知
         guard recordState == .recording else {
             print("[KeyboardVM] ⚠️ Ignoring recordingStopped — not in recording state")
             return
         }
+        cancelPendingStartupWaiters(reason: "recordingStopped")
         recordState = .processing
         displayText = "处理中..."
         startProcessingTimeout()
     }
 
     private func onResultReady() {
+        guard isActiveInstance else {
+            keyboardLog("[KeyboardVM] Ignored resultReady for stale instance")
+            return
+        }
         print("[KeyboardVM][Inject] resultReady notification received, recordState=\(recordState), sharedState=\(sharedRead("recordingState") ?? "nil")")
         processingTimeoutTask?.cancel()
         if !consumePendingResult() {
@@ -263,6 +336,7 @@ final class KeyboardViewModel {
     }
 
     private func onAudioLevelUpdate() {
+        guard isActiveInstance else { return }
         if let str = sharedRead("audioLevel"), let level = Float(str) {
             audioLevel = level
         }
@@ -270,11 +344,15 @@ final class KeyboardViewModel {
 
     /// 主 App 存活确认 — 取消 URL Scheme 兜底计时
     private func onRequestAck() {
+        guard isActiveInstance else {
+            keyboardLog("[KeyboardVM] Ignored requestAck for stale instance")
+            return
+        }
         guard recordState == .waitingMainApp else { return }
         ackTimeoutTask?.cancel()
         ackReceived = true
         displayText = "准备录音..."
-        print("[KeyboardVM] ACK received — main app alive, waiting for recording")
+        keyboardLog("[KeyboardVM] ACK received — main app alive, waiting for recording")
     }
 
     private func readSharedPermissionSnapshot() -> SharedPermissionSnapshot? {
@@ -362,7 +440,8 @@ final class KeyboardViewModel {
 
     /// 用户从主 App 返回时调用
     func onReturnFromMainApp() {
-        print("[KeyboardVM] Returned from main app")
+        becomeActive(reason: "onReturnFromMainApp")
+        keyboardLog("[KeyboardVM] Returned from main app")
         recoverState()
     }
 
@@ -371,6 +450,10 @@ final class KeyboardViewModel {
     // ----------------------------------------
 
     private func stopRecordingFromKeyboard() {
+        guard isActiveInstance else {
+            keyboardLog("[KeyboardVM] Ignored stopRecordingFromKeyboard for stale instance")
+            return
+        }
         recordState = .processing
         displayText = "处理中..."
         startProcessingTimeout()
@@ -387,13 +470,23 @@ final class KeyboardViewModel {
 
     /// 智能录音触发：Darwin 触发 + ACK 检测，超时 fallback URL Scheme
     private func triggerRecording() {
+        becomeActive(reason: "triggerRecording")
         displayText = ""
         errorMsg = nil
         ackReceived = false
 
         let permissionSnapshot = readSharedPermissionSnapshot()
         let serviceState = readSharedServiceState()
-        print("[KeyboardDecision] tapRecord permission=\(permissionSnapshot?.rawValue ?? "nil") serviceState=\(serviceState?.rawValue ?? "nil") current=\(recordState)")
+        let sharedRecordingState = sharedRead("recordingState")
+        keyboardLog("[KeyboardDecision] tapRecord permission=\(permissionSnapshot?.rawValue ?? "nil") serviceState=\(serviceState?.rawValue ?? "nil") current=\(recordState)")
+
+        if sharedRecordingState == "starting" {
+            recordState = .waitingMainApp
+            displayText = "准备录音..."
+            startRecoveryTimeout()
+            keyboardLog("[KeyboardDecision] adopted existing shared starting before new trigger")
+            return
+        }
 
         switch permissionSnapshot {
         case .granted:
@@ -446,20 +539,33 @@ final class KeyboardViewModel {
             CFNotificationCenterGetDarwinNotifyCenter(),
             kRequestStart, nil, nil, true
         )
-        print("[KeyboardDecision] action=requestStartViaDarwin")
+        keyboardLog("[KeyboardDecision] action=requestStartViaDarwin")
 
         // 600ms 超时：若无 ACK → 主App极可能被睡眠/杀死，兜底 URL Scheme
         ackTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard let self, !Task.isCancelled,
+                  self.isActiveInstance,
                   self.recordState == .waitingMainApp, !self.ackReceived else { return }
-            if self.shouldSuppressFallbackBecauseProgressed() {
+            if self.adoptProgressedSharedStateIfNeeded(reason: "ackTimeout:firstCheck")
+                || self.shouldSuppressFallbackBecauseProgressed() {
                 self.displayText = "准备录音..."
-                print("[KeyboardDecision] fallback suppressed because shared state already progressed")
+                keyboardLog("[KeyboardDecision] fallback suppressed because shared state already progressed")
                 return
             }
-            print("[KeyboardDecision] noACKFallback=openMainAppForStartRecording")
-            self.openMainAppViaURLScheme(host: "startRecording")
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled,
+                  self.isActiveInstance,
+                  self.recordState == .waitingMainApp, !self.ackReceived else { return }
+            if self.adoptProgressedSharedStateIfNeeded(reason: "ackTimeout:secondCheck")
+                || self.shouldSuppressFallbackBecauseProgressed() {
+                self.displayText = "准备录音..."
+                keyboardLog("[KeyboardDecision] fallback suppressed on second check because shared state already progressed")
+                return
+            }
+            let host = self.fallbackHostForCurrentSharedState()
+            keyboardLog("[KeyboardDecision] noACKFallback route=\(host)")
+            self.openMainAppViaURLScheme(host: host)
         }
 
         startRecoveryTimeout()
@@ -473,14 +579,37 @@ final class KeyboardViewModel {
     private func startRecoveryTimeout() {
         recoveryTask?.cancel()
         recoveryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard let self, !Task.isCancelled else { return }
-            if self.recordState == .waitingMainApp {
-                if self.shouldSuppressFallbackBecauseProgressed() {
+
+            let interval: UInt64 = 150_000_000
+            let maxChecks = 100 // 约 15 秒
+
+            for check in 1...maxChecks {
+                try? await Task.sleep(nanoseconds: interval)
+                guard !Task.isCancelled else { return }
+                guard self.isActiveInstance else { return }
+                guard self.recordState == .waitingMainApp else { return }
+
+                if self.adoptProgressedSharedStateIfNeeded(reason: "recoveryPoll#\(check)")
+                    || self.shouldSuppressFallbackBecauseProgressed() {
                     self.displayText = "准备录音..."
-                    print("[KeyboardVM] Recovery timeout suppressed because shared state already progressed")
+                    keyboardLog("[KeyboardVM] Recovery poll adopted progressed state at check #\(check)")
                     return
                 }
+
+                let serviceState = self.readSharedServiceState()
+                let permissionSnapshot = self.readSharedPermissionSnapshot()
+                if permissionSnapshot != .granted
+                    || serviceState == .disabledByUser
+                    || serviceState == .disabledBySystemPermission {
+                    let host = self.fallbackHostForCurrentSharedState()
+                    keyboardLog("[KeyboardVM] Recovery poll detected service unavailable at check #\(check), route=\(host)")
+                    self.openMainAppViaURLScheme(host: host)
+                    return
+                }
+            }
+
+            if self.recordState == .waitingMainApp {
                 print("[KeyboardVM] ⚠️ Recovery timeout — resetting to idle")
                 self.errorMsg = "录音启动超时，请重试"
                 self.recordState = .idle
@@ -497,8 +626,73 @@ final class KeyboardViewModel {
             || sharedState == "processing"
             || serviceState == SharedServiceState.recording.rawValue
             || serviceState == SharedServiceState.processing.rawValue
-        print("[KeyboardDecision] fallback check shared recordingState=\(sharedState) serviceState=\(serviceState) progressed=\(progressed)")
+        keyboardLog("[KeyboardDecision] fallback check shared recordingState=\(sharedState) serviceState=\(serviceState) progressed=\(progressed)")
         return progressed
+    }
+
+    private func fallbackHostForCurrentSharedState() -> String {
+        let permissionSnapshot = readSharedPermissionSnapshot()
+        let serviceState = readSharedServiceState()
+
+        if permissionSnapshot != .granted {
+            return "restoreVoiceFlow"
+        }
+
+        switch serviceState {
+        case .disabledByUser, .disabledBySystemPermission:
+            return "restoreVoiceFlow"
+        default:
+            return "startRecording"
+        }
+    }
+
+    @discardableResult
+    private func adoptProgressedSharedStateIfNeeded(reason: String) -> Bool {
+        let sharedState = sharedRead("recordingState") ?? "nil"
+        let serviceState = readSharedServiceState()
+
+        switch serviceState {
+        case .recording:
+            cancelPendingStartupWaiters(reason: "\(reason):serviceRecording")
+            recordState = .recording
+            displayText = "正在录音..."
+            errorMsg = nil
+            keyboardLog("[KeyboardVM] Adopted serviceState -> recording reason=\(reason)")
+            return true
+        case .processing:
+            cancelPendingStartupWaiters(reason: "\(reason):serviceProcessing")
+            recordState = .processing
+            displayText = "处理中..."
+            startProcessingTimeout()
+            keyboardLog("[KeyboardVM] Adopted serviceState -> processing reason=\(reason)")
+            return true
+        default:
+            break
+        }
+
+        switch sharedState {
+        case "recording":
+            cancelPendingStartupWaiters(reason: "\(reason):sharedRecording")
+            recordState = .recording
+            displayText = "正在录音..."
+            errorMsg = nil
+            keyboardLog("[KeyboardVM] Adopted shared state -> recording reason=\(reason)")
+            return true
+        case "processing":
+            cancelPendingStartupWaiters(reason: "\(reason):sharedProcessing")
+            recordState = .processing
+            displayText = "处理中..."
+            startProcessingTimeout()
+            keyboardLog("[KeyboardVM] Adopted shared state -> processing reason=\(reason)")
+            return true
+        case "starting":
+            displayText = "准备录音..."
+            keyboardLog("[KeyboardVM] Shared state still starting reason=\(reason)")
+            return true
+        default:
+            break
+        }
+        return false
     }
 
     // ----------------------------------------
@@ -511,6 +705,7 @@ final class KeyboardViewModel {
         processingTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 30_000_000_000)
             guard let self, !Task.isCancelled else { return }
+            guard self.isActiveInstance else { return }
             guard self.recordState == .processing else { return }
             // 超时前最后尝试读取结果
             if self.consumePendingResult() { return }
@@ -534,13 +729,17 @@ final class KeyboardViewModel {
     /// URL Scheme 兜底：跳转主 App 做恢复或启动
     /// Extension 进程没有 UIApplication.shared，必须通过 extensionContext 或 selector 打开 URL
     private func openMainAppViaURLScheme(host: String) {
+        guard isActiveInstance else {
+            keyboardLog("[KeyboardDecision] skipped openURL for stale instance host=\(host)")
+            return
+        }
         guard let url = URL(string: "voiceflow://\(host)") else {
             errorMsg = "无法打开主应用"
             recordState = .idle
             return
         }
 
-        print("[KeyboardDecision] openURL=\(url.absoluteString)")
+        keyboardLog("[KeyboardDecision] openURL=\(url.absoluteString)")
         displayText = "跳转中..."
 
         // 优先使用 extensionContext（官方 API，需要 Full Access）
@@ -548,7 +747,7 @@ final class KeyboardViewModel {
             context.open(url) { [weak self] ok in
                 Task { @MainActor [weak self] in
                     if !ok {
-                        print("[KeyboardVM] extensionContext.open failed, trying responder chain")
+                        keyboardLog("[KeyboardVM] extensionContext.open failed, trying responder chain")
                         self?.openURLViaResponderChain(url)
                     }
                 }

@@ -37,6 +37,7 @@ struct VoiceFlowiOSApp: App {
 
     @State private var appState = AppState.shared
     @Environment(\.scenePhase) private var scenePhase
+    @MainActor private static var pendingURLStartTask: Task<Void, Never>?
 
     // Darwin 监听 + 音频会话必须在 App 启动时立即注册，
     // 而非等到 ContentView.onAppear — 否则 URL Scheme 冷启动时
@@ -134,6 +135,8 @@ struct VoiceFlowiOSApp: App {
                         print("[App] requestStart received in background but armed state is cold — no ACK, let keyboard fallback URL")
                         return
                     }
+                    SharedStore.write("recordingState", "starting")
+                    print("[App] Darwin requestStart marked shared recordingState=starting")
                     // 立即 ACK — 让键盘知道主 App 存活
                     CFNotificationCenterPostNotification(
                         CFNotificationCenterGetDarwinNotifyCenter(),
@@ -166,6 +169,27 @@ struct VoiceFlowiOSApp: App {
             print("[App] ▶️ startRecording triggered from keyboard (URL Scheme)")
             appState.selectedTab = .home
             appState.isVoiceFlowEnabled = true
+
+            switch appState.recordingStatus {
+            case .recording:
+                appState.isKeyboardRecording = true
+                appState.keyboardLaunchBehavior = .none
+                SharedStore.write("recordingState", "recording")
+                appState.refreshSharedServiceState(reason: "urlStartRecording:alreadyRecording")
+                postDarwinNotification(kVoiceFlowRecordingStarted)
+                print("[App] URL startRecording ignored because app is already recording")
+                return
+            case .processing:
+                appState.isKeyboardRecording = true
+                appState.keyboardLaunchBehavior = .none
+                SharedStore.write("recordingState", "processing")
+                appState.refreshSharedServiceState(reason: "urlStartRecording:alreadyProcessing")
+                print("[App] URL startRecording ignored because app is processing")
+                return
+            case .idle, .done, .error:
+                break
+            }
+
             appState.isKeyboardRecording = true
             appState.keyboardLaunchBehavior = .startRecording
             SharedStore.write("recordingState", "starting")
@@ -179,21 +203,7 @@ struct VoiceFlowiOSApp: App {
                 return
             }
 
-            Task { @MainActor in
-                // iOS 深层机制：即使触发了 URL Scheme，代码执行时 App 可能仍处于状态切换中（尚未完全 Active）。
-                // 若此时立刻启动音频引擎，非常容易遭遇 2003329396 后台录音限制阻拦。
-                // 因此我们延迟 500ms，确保 App 已经彻底转入前台，再安全拉起内核。
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                print("[App] URL startRecording delayed task fired")
-
-                await appState.startRecording()
-
-                if case .error(let msg) = appState.recordingStatus {
-                    print("[App] ❌ Recording error: \(msg)")
-                    saveErrorAndNotifyKeyboard(msg)
-                    appState.isKeyboardRecording = false
-                }
-            }
+            scheduleDeferredURLStartRecording(reason: "urlStartRecording")
 
         case "restoreVoiceFlow":
             print("[App] ▶️ restoreVoiceFlow triggered from keyboard (URL Scheme)")
@@ -339,15 +349,62 @@ struct VoiceFlowiOSApp: App {
             Task { @MainActor in
                 appState.reconcileAutoCloseFromLifecycle(reason: "sceneActive")
                 if appState.pendingRestoreWarmStandby {
-                    print("[App] sceneActive detected pending restore warm standby — delaying warmup")
-                    try? await Task.sleep(nanoseconds: 350_000_000)
-                    await appState.ensureArmedWarmStandbyIfNeeded(reason: "restoreVoiceFlow:sceneActive")
+                    print("[App] sceneActive detected pending restore warm standby — starting retry window")
+                    await appState.performRestoreWarmStandbyRecovery()
                     appState.pendingRestoreWarmStandby = false
                 }
                 await appState.ensureArmedWarmStandbyIfNeeded(reason: "sceneActive")
+                if appState.isKeyboardRecording,
+                   appState.keyboardLaunchBehavior == .startRecording,
+                   appState.recordingStatus == .idle {
+                    scheduleDeferredURLStartRecording(reason: "sceneActive")
+                }
             }
         default:
             break
+        }
+    }
+
+    @MainActor
+    private func scheduleDeferredURLStartRecording(reason: String) {
+        Self.pendingURLStartTask?.cancel()
+        Self.pendingURLStartTask = Task { @MainActor in
+            defer { Self.pendingURLStartTask = nil }
+
+            let interval: UInt64 = 100_000_000
+            let maxChecks = 30 // 最长等待约 3 秒进入 active
+
+            for check in 1...maxChecks {
+                guard !Task.isCancelled else { return }
+                if UIApplication.shared.applicationState == .active {
+                    print("[App] URL startRecording active gate passed at check #\(check) reason=\(reason)")
+                    break
+                }
+                try? await Task.sleep(nanoseconds: interval)
+            }
+
+            guard !Task.isCancelled else { return }
+
+            guard UIApplication.shared.applicationState == .active else {
+                print("[App] URL startRecording still not active after wait, keeping pending launch reason=\(reason)")
+                return
+            }
+
+            guard appState.isKeyboardRecording,
+                  appState.keyboardLaunchBehavior == .startRecording,
+                  appState.recordingStatus == .idle else {
+                print("[App] URL startRecording skipped because launch intent changed reason=\(reason)")
+                return
+            }
+
+            print("[App] URL startRecording delayed task fired")
+            await appState.startRecording()
+
+            if case .error(let msg) = appState.recordingStatus {
+                print("[App] ❌ Recording error: \(msg)")
+                saveErrorAndNotifyKeyboard(msg)
+                appState.isKeyboardRecording = false
+            }
         }
     }
 }

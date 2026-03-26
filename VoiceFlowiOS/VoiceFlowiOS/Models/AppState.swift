@@ -313,6 +313,35 @@ final class AppState {
         syncSharedServiceSnapshot(reason: "warmStandby:\(reason)")
     }
 
+    func performRestoreWarmStandbyRecovery() async {
+        let delays: [UInt64] = [350_000_000, 700_000_000, 1_100_000_000]
+
+        for (index, delay) in delays.enumerated() {
+            guard shouldContinueRestoreWarmStandbyRetry else {
+                print("[ArmedState] restore warm standby retry stopped before attempt #\(index + 1)")
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: delay)
+
+            guard shouldContinueRestoreWarmStandbyRetry else {
+                print("[ArmedState] restore warm standby retry stopped after wait before attempt #\(index + 1)")
+                return
+            }
+
+            let attempt = index + 1
+            print("[ArmedState] restore warm standby attempt #\(attempt)")
+            await ensureArmedWarmStandbyIfNeeded(reason: "restoreVoiceFlow:sceneActive#\(attempt)")
+
+            if isBackgroundCaptureReady {
+                print("[ArmedState] restore warm standby succeeded on attempt #\(attempt)")
+                return
+            }
+        }
+
+        print("[ArmedState] restore warm standby exhausted retry window without success")
+    }
+
     func reconcileAutoCloseFromLifecycle(reason: String) {
         reconcileAutoCloseIfNeeded(reason: reason)
     }
@@ -587,6 +616,13 @@ final class AppState {
         case .recording, .processing:
             return false
         }
+    }
+
+    private var shouldContinueRestoreWarmStandbyRetry: Bool {
+        guard isVoiceFlowEnabled else { return false }
+        guard PermissionManager.shared.microphoneStatus == .granted else { return false }
+        guard recordingStatus == .idle || recordingStatus == .done || isErrorState(recordingStatus) else { return false }
+        return !isBackgroundCaptureReady
     }
 
     private func reconcileAutoCloseIfNeeded(reason: String) {

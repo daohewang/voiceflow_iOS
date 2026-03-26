@@ -7,6 +7,7 @@
 
 import UIKit
 import SwiftUI
+import Foundation
 
 // ========================================
 // MARK: - Keyboard View Controller
@@ -19,6 +20,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        keyboardLog("[KeyboardVC] viewDidLoad")
 
         // ----------------------------------------
         // MARK: - 固定键盘高度
@@ -61,7 +63,14 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        keyboardLog("[KeyboardVC] viewWillAppear")
         // 用户从主 App 返回键盘时，检查是否有待插入的文字
         viewModel?.onReturnFromMainApp()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        keyboardLog("[KeyboardVC] viewWillDisappear")
+        viewModel?.suspendInactiveInstance(reason: "viewWillDisappear")
     }
 }
