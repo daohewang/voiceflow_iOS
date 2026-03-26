@@ -1,0 +1,21 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="1024" fill="black"/>
+  <!-- 绘制 5 个垂直的圆角线条作为波形，调整间距和宽度以使其更舒展 -->
+  <!-- 每一个线条宽度 80，间距 120 (中心点距离) -->
+  <!-- 总宽度 = 4 * 120 + 80 = 560 (1024 的 55%) -->
+  
+  <!-- Line 1: Leftmost -->
+  <rect x="232" y="412" width="80" height="200" rx="40" fill="white"/>
+  
+  <!-- Line 2: Mid-Left -->
+  <rect x="352" y="312" width="80" height="400" rx="40" fill="white"/>
+  
+  <!-- Line 3: Center (Tallest) -->
+  <rect x="472" y="212" width="80" height="600" rx="40" fill="white"/>
+  
+  <!-- Line 4: Mid-Right -->
+  <rect x="592" y="262" width="80" height="500" rx="40" fill="white"/>
+  
+  <!-- Line 5: Rightmost -->
+  <rect x="712" y="362" width="80" height="300" rx="40" fill="white"/>
+</svg>

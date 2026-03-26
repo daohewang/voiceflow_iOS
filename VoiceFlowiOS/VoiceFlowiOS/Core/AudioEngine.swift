@@ -143,7 +143,7 @@ final class AudioEngine: @unchecked Sendable {
             print("[ArmedState][AudioEngine] AVAudioSession activated for warm standby")
         } catch {
             print("[ArmedState][AudioEngine] session activation failed during warm standby: \(error)")
-            throw AudioError.audioSessionFailed
+            throw AudioError.audioSessionFailed(error)
         }
 
         engine = AVAudioEngine()

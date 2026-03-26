@@ -95,14 +95,7 @@ private struct HomeHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(.black)
-                        .frame(width: 24, height: 24)
-                    Image(systemName: "waveform")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                }
+                AppLogoView(size: 24, cornerRadius: 6)
                 Text("VoiceFlow")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(.black)
@@ -289,6 +282,32 @@ private struct ClipboardToast: View {
                 .fill(Color(hex: "#0f172a"))
                 .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
         )
+    }
+}
+
+// ========================================
+// MARK: - App Logo Component
+// ========================================
+
+struct AppLogoView: View {
+    let size: CGFloat
+    let cornerRadius: CGFloat
+    
+    init(size: CGFloat = 24, cornerRadius: CGFloat = 6) {
+        self.size = size
+        self.cornerRadius = cornerRadius
+    }
+    
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .fill(.black)
+                .frame(width: size, height: size)
+            
+            Image(systemName: "waveform")
+                .font(.system(size: size * 0.5, weight: .bold))
+                .foregroundStyle(.white)
+        }
     }
 }
 
