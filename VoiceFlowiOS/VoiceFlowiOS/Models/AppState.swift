@@ -66,6 +66,8 @@ final class AppState {
     // 实时活动引用
     private var liveActivity: Activity<VoiceFlowActivityAttributes>? = nil
     private var autoCloseTask: Task<Void, Never>?
+    private var autoCloseDeadline: Date?
+    private var autoCloseScheduledPolicy: AutoClosePolicy?
 
     // ----------------------------------------
     // MARK: - Singleton
@@ -495,14 +497,25 @@ final class AppState {
     }
 
     private func scheduleAutoCloseIfNeeded(reason: String) {
-        cancelAutoClose(reason: "\(reason):reschedule")
-
         guard let duration = autoClosePolicy.durationSeconds else {
+            cancelAutoClose(reason: "\(reason):policyNever")
             print("[AutoClose] skip scheduling (\(reason)) because policy is 永不关闭")
             return
         }
 
+        if autoCloseTask != nil,
+           autoCloseScheduledPolicy == autoClosePolicy,
+           let deadline = autoCloseDeadline,
+           deadline > Date() {
+            print("[AutoClose] keep existing schedule policy=\(autoClosePolicy.title) reason=\(reason) deadline=\(deadline)")
+            return
+        }
+
+        cancelAutoClose(reason: "\(reason):reschedule")
+
         let deadline = Date().addingTimeInterval(duration)
+        autoCloseDeadline = deadline
+        autoCloseScheduledPolicy = autoClosePolicy
         print("[AutoClose] scheduled policy=\(autoClosePolicy.title) reason=\(reason) deadline=\(deadline)")
 
         autoCloseTask = Task { @MainActor [weak self] in
@@ -512,6 +525,9 @@ final class AppState {
             guard self.permissionEligibleForArmedAutoClose else { return }
 
             print("[AutoClose] deadline reached, disabling VoiceFlow")
+            self.autoCloseTask = nil
+            self.autoCloseDeadline = nil
+            self.autoCloseScheduledPolicy = nil
             self.isVoiceFlowEnabled = false
         }
     }
@@ -522,6 +538,8 @@ final class AppState {
         }
         autoCloseTask?.cancel()
         autoCloseTask = nil
+        autoCloseDeadline = nil
+        autoCloseScheduledPolicy = nil
     }
 
     private var permissionEligibleForArmedAutoClose: Bool {
