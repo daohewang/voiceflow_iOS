@@ -480,12 +480,30 @@ final class KeyboardViewModel {
         let sharedRecordingState = sharedRead("recordingState")
         keyboardLog("[KeyboardDecision] tapRecord permission=\(permissionSnapshot?.rawValue ?? "nil") serviceState=\(serviceState?.rawValue ?? "nil") current=\(recordState)")
 
-        if sharedRecordingState == "starting" {
+        switch sharedRecordingState {
+        case "starting":
             recordState = .waitingMainApp
             displayText = "准备录音..."
             startRecoveryTimeout()
             keyboardLog("[KeyboardDecision] adopted existing shared starting before new trigger")
             return
+        case "recording":
+            cancelPendingStartupWaiters(reason: "triggerRecording:sharedRecording")
+            recordState = .recording
+            displayText = "正在录音..."
+            errorMsg = nil
+            keyboardLog("[KeyboardDecision] attached existing shared recording before new trigger")
+            return
+        case "processing":
+            cancelPendingStartupWaiters(reason: "triggerRecording:sharedProcessing")
+            recordState = .processing
+            displayText = "处理中..."
+            errorMsg = "上一段仍在处理中，请稍后"
+            startProcessingTimeout()
+            keyboardLog("[KeyboardDecision] attached existing shared processing before new trigger")
+            return
+        default:
+            break
         }
 
         switch permissionSnapshot {
@@ -528,7 +546,9 @@ final class KeyboardViewModel {
 
         sharedRemove("pendingResult")
         sharedRemove("audioLevel")
-        sharedRemove("recordingState")  // 清除上次残留的状态文件
+        if sharedRecordingState == "idle" || sharedRecordingState == "done" {
+            sharedRemove("recordingState")
+        }
 
         // 放弃不稳定的心跳时间戳检测，直接使用 Darwin 通知 + ACK 机制
         // 因为即使主 App 存活，后台 Timer 也极易被 iOS 降频导致心跳更新延迟，产生误判跳转
@@ -541,9 +561,10 @@ final class KeyboardViewModel {
         )
         keyboardLog("[KeyboardDecision] action=requestStartViaDarwin")
 
-        // 600ms 超时：若无 ACK → 主App极可能被睡眠/杀死，兜底 URL Scheme
+        // Darwin 直启在键盘切回 / 扩展重建时 ACK 可能迟到。
+        // 对可直接 startRecording 的场景多给一个短宽限，避免已经起录却又误跳 URL。
         ackTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 600_000_000)
+            try? await Task.sleep(nanoseconds: 900_000_000)
             guard let self, !Task.isCancelled,
                   self.isActiveInstance,
                   self.recordState == .waitingMainApp, !self.ackReceived else { return }
@@ -553,7 +574,7 @@ final class KeyboardViewModel {
                 keyboardLog("[KeyboardDecision] fallback suppressed because shared state already progressed")
                 return
             }
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(nanoseconds: 450_000_000)
             guard !Task.isCancelled,
                   self.isActiveInstance,
                   self.recordState == .waitingMainApp, !self.ackReceived else { return }
@@ -563,9 +584,24 @@ final class KeyboardViewModel {
                 keyboardLog("[KeyboardDecision] fallback suppressed on second check because shared state already progressed")
                 return
             }
-            let host = self.fallbackHostForCurrentSharedState()
-            keyboardLog("[KeyboardDecision] noACKFallback route=\(host)")
-            self.openMainAppViaURLScheme(host: host)
+            let initialHost = self.fallbackHostForCurrentSharedState()
+            if initialHost == "startRecording" {
+                self.displayText = "准备录音..."
+                keyboardLog("[KeyboardDecision] extending ACK grace before startRecording fallback")
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                guard !Task.isCancelled,
+                      self.isActiveInstance,
+                      self.recordState == .waitingMainApp, !self.ackReceived else { return }
+                if self.adoptProgressedSharedStateIfNeeded(reason: "ackTimeout:finalCheck")
+                    || self.shouldSuppressFallbackBecauseProgressed() {
+                    self.displayText = "准备录音..."
+                    keyboardLog("[KeyboardDecision] fallback suppressed on final grace check because shared state already progressed")
+                    return
+                }
+            }
+            let finalHost = self.fallbackHostForCurrentSharedState()
+            keyboardLog("[KeyboardDecision] noACKFallback route=\(finalHost)")
+            self.openMainAppViaURLScheme(host: finalHost)
         }
 
         startRecoveryTimeout()

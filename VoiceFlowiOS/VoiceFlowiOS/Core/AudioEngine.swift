@@ -132,8 +132,33 @@ final class AudioEngine: @unchecked Sendable {
             return
         }
 
+        try activateWarmStandbySession()
+        prepareFreshEngineForCapture()
+
         do {
-            let session = AVAudioSession.sharedInstance()
+            try configureAndStartEngine()
+            print("[ArmedState][AudioEngine] warm standby started successfully")
+        } catch {
+            print("[ArmedState][AudioEngine] first warm standby start failed (\(error)), cooling down and retrying")
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            Thread.sleep(forTimeInterval: 0.1)
+            try activateWarmStandbySession()
+            prepareFreshEngineForCapture()
+
+            do {
+                try configureAndStartEngine()
+                print("[ArmedState][AudioEngine] warm standby started successfully on retry")
+            } catch {
+                print("[ArmedState][AudioEngine] warm standby failed: \(error)")
+                throw error
+            }
+        }
+    }
+
+    private func activateWarmStandbySession() throws {
+        let session = AVAudioSession.sharedInstance()
+
+        do {
             try session.setCategory(
                 .playAndRecord,
                 mode: .default,
@@ -143,21 +168,29 @@ final class AudioEngine: @unchecked Sendable {
             print("[ArmedState][AudioEngine] AVAudioSession activated for warm standby")
         } catch {
             print("[ArmedState][AudioEngine] session activation failed during warm standby: \(error)")
-            throw AudioError.audioSessionFailed(error)
-        }
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            Thread.sleep(forTimeInterval: 0.1)
 
+            do {
+                try session.setCategory(
+                    .playAndRecord,
+                    mode: .default,
+                    options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+                )
+                try session.setActive(true, options: [])
+                print("[ArmedState][AudioEngine] AVAudioSession activated for warm standby after cooldown")
+            } catch {
+                print("[ArmedState][AudioEngine] session activation retry failed during warm standby: \(error)")
+                throw AudioError.audioSessionFailed(error)
+            }
+        }
+    }
+
+    private func prepareFreshEngineForCapture() {
         engine = AVAudioEngine()
         bufferLock.lock()
         accumulatedBuffer.removeAll()
         bufferLock.unlock()
-
-        do {
-            try configureAndStartEngine()
-            print("[ArmedState][AudioEngine] warm standby started successfully")
-        } catch {
-            print("[ArmedState][AudioEngine] warm standby failed: \(error)")
-            throw error
-        }
     }
 
     // ----------------------------------------

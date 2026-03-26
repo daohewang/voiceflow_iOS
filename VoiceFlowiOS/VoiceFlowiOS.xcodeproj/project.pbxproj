@@ -140,7 +140,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		69DF169C2F715A0A00170232 /* Exceptions for "voiceFlowWidget" folder in "voiceFlowWidgetExtension" target */ = {
+		69DF169C2F715A0A00170232 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -150,18 +150,7 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		69DF16892F715A0800170232 /* voiceFlowWidget */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				69DF169C2F715A0A00170232 /* Exceptions for "voiceFlowWidget" folder in "voiceFlowWidgetExtension" target */,
-			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = voiceFlowWidget;
-			sourceTree = "<group>";
-		};
+		69DF16892F715A0800170232 /* voiceFlowWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (69DF169C2F715A0A00170232 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = voiceFlowWidget; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -552,7 +541,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VoiceFlowiOS/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -630,7 +619,7 @@
 				INFOPLIST_FILE = voiceFlowWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = voiceFlowWidget;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 18;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -690,7 +679,7 @@
 				INFOPLIST_FILE = voiceFlowWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = voiceFlowWidget;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 18;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -759,7 +748,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VoiceFlowiOS/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -782,7 +771,7 @@
 				DEVELOPMENT_TEAM = J79NLFGR4L;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VoiceFlowKeyboard/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../../Frameworks",
@@ -807,7 +796,7 @@
 				DEVELOPMENT_TEAM = J79NLFGR4L;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VoiceFlowKeyboard/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../../Frameworks",

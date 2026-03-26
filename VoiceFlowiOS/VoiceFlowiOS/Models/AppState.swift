@@ -313,20 +313,28 @@ final class AppState {
         syncSharedServiceSnapshot(reason: "warmStandby:\(reason)")
     }
 
-    func performRestoreWarmStandbyRecovery() async {
-        let delays: [UInt64] = [350_000_000, 700_000_000, 1_100_000_000]
+    @discardableResult
+    func performRestoreWarmStandbyRecovery() async -> Bool {
+        // 只在前台继续恢复；一旦用户切回键盘，就保留 pending 标记，
+        // 等下次真正回到主 App 前台时再继续，而不是在后台盲目重试。
+        let delays: [UInt64] = [350_000_000, 900_000_000, 1_500_000_000]
 
         for (index, delay) in delays.enumerated() {
             guard shouldContinueRestoreWarmStandbyRetry else {
                 print("[ArmedState] restore warm standby retry stopped before attempt #\(index + 1)")
-                return
+                return isBackgroundCaptureReady
             }
 
             try? await Task.sleep(nanoseconds: delay)
 
             guard shouldContinueRestoreWarmStandbyRetry else {
                 print("[ArmedState] restore warm standby retry stopped after wait before attempt #\(index + 1)")
-                return
+                return isBackgroundCaptureReady
+            }
+
+            guard UIApplication.shared.applicationState == .active else {
+                print("[ArmedState] restore warm standby paused before attempt #\(index + 1) because app is no longer active")
+                return false
             }
 
             let attempt = index + 1
@@ -335,11 +343,12 @@ final class AppState {
 
             if isBackgroundCaptureReady {
                 print("[ArmedState] restore warm standby succeeded on attempt #\(attempt)")
-                return
+                return true
             }
         }
 
         print("[ArmedState] restore warm standby exhausted retry window without success")
+        return isBackgroundCaptureReady
     }
 
     func reconcileAutoCloseFromLifecycle(reason: String) {

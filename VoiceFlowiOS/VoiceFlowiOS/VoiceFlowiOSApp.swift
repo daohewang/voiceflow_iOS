@@ -348,12 +348,20 @@ struct VoiceFlowiOSApp: App {
             }
             Task { @MainActor in
                 appState.reconcileAutoCloseFromLifecycle(reason: "sceneActive")
+                let handledRestoreRecovery = appState.pendingRestoreWarmStandby
                 if appState.pendingRestoreWarmStandby {
                     print("[App] sceneActive detected pending restore warm standby — starting retry window")
-                    await appState.performRestoreWarmStandbyRecovery()
-                    appState.pendingRestoreWarmStandby = false
+                    let restored = await appState.performRestoreWarmStandbyRecovery()
+                    appState.pendingRestoreWarmStandby = !restored
+                    if restored {
+                        print("[App] pending restore warm standby cleared after successful recovery")
+                    } else {
+                        print("[App] pending restore warm standby kept for next active session")
+                    }
                 }
-                await appState.ensureArmedWarmStandbyIfNeeded(reason: "sceneActive")
+                if !handledRestoreRecovery {
+                    await appState.ensureArmedWarmStandbyIfNeeded(reason: "sceneActive")
+                }
                 if appState.isKeyboardRecording,
                    appState.keyboardLaunchBehavior == .startRecording,
                    appState.recordingStatus == .idle {
