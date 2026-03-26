@@ -453,6 +453,11 @@ final class KeyboardViewModel {
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard let self, !Task.isCancelled,
                   self.recordState == .waitingMainApp, !self.ackReceived else { return }
+            if self.shouldSuppressFallbackBecauseProgressed() {
+                self.displayText = "准备录音..."
+                print("[KeyboardDecision] fallback suppressed because shared state already progressed")
+                return
+            }
             print("[KeyboardDecision] noACKFallback=openMainAppForStartRecording")
             self.openMainAppViaURLScheme(host: "startRecording")
         }
@@ -471,12 +476,29 @@ final class KeyboardViewModel {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard let self, !Task.isCancelled else { return }
             if self.recordState == .waitingMainApp {
+                if self.shouldSuppressFallbackBecauseProgressed() {
+                    self.displayText = "准备录音..."
+                    print("[KeyboardVM] Recovery timeout suppressed because shared state already progressed")
+                    return
+                }
                 print("[KeyboardVM] ⚠️ Recovery timeout — resetting to idle")
                 self.errorMsg = "录音启动超时，请重试"
                 self.recordState = .idle
                 self.displayText = ""
             }
         }
+    }
+
+    private func shouldSuppressFallbackBecauseProgressed() -> Bool {
+        let sharedState = sharedRead("recordingState") ?? "nil"
+        let serviceState = readSharedServiceState()?.rawValue ?? "nil"
+        let progressed = sharedState == "starting"
+            || sharedState == "recording"
+            || sharedState == "processing"
+            || serviceState == SharedServiceState.recording.rawValue
+            || serviceState == SharedServiceState.processing.rawValue
+        print("[KeyboardDecision] fallback check shared recordingState=\(sharedState) serviceState=\(serviceState) progressed=\(progressed)")
+        return progressed
     }
 
     // ----------------------------------------
